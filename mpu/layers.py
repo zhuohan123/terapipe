@@ -326,10 +326,12 @@ class RowParallelLinear(torch.nn.Module):
         # All-reduce across all the partitions.
         if return_reduce_time:
             torch.cuda.synchronize()
+            torch.distributed.barrier()
             start_time = time.time()
         output_ = reduce_from_model_parallel_region(output_parallel)
         if return_reduce_time:
             torch.cuda.synchronize()
+            torch.distributed.barrier()
             reduce_time = time.time() - start_time
         if self.bias is not None:
             output = output_ + self.bias
