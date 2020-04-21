@@ -28,12 +28,14 @@ def set_random_seed(seed):
     mpu.model_parallel_cuda_manual_seed(seed)
 
 
-def measure_time(b, n, m, d, repeat_times=100):
+def measure_time(b, n, m, d, repeat_times=100000):
     """Test the running speed of Y=XAB where X is b*n, A is n*m and B is m*d"""
     mul_A = mpu.ColumnParallelLinear(n, m, bias=False, gather_output=False).cuda()
     mul_B = mpu.RowParallelLinear(m, d, bias=False, input_is_parallel=True).cuda()
     X = torch.randn(b, n).cuda()
     with torch.no_grad():
+        for _ in range(2):
+            Y = mul_B(mul_A(X))
         start_time = time.time()
         for _ in range(repeat_times):
             Y = mul_B(mul_A(X))
@@ -57,7 +59,7 @@ def distributed_main(process_idx, args):
     dist.all_reduce(torch.zeros(1).cuda())
     mpu.initialize_model_parallel(args.distributed_world_size)
     set_random_seed(1337)
-    measure_time(16, 16, 16, 16)
+    measure_time(160, 160, 160, 160)
 
 
 if __name__ == "__main__":
