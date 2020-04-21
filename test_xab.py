@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import random
 import time
+import itertools
 
 def suppress_output(rank):
     """Suppress printing on the current device. Force printing with `force=True`."""
@@ -28,20 +29,24 @@ def set_random_seed(seed):
     mpu.model_parallel_cuda_manual_seed(seed)
 
 
-def measure_time(b, n, m, d, repeat_times=100000):
+def measure_time(b, n, m, d, repeat_times=1000):
     """Test the running speed of Y=XAB where X is b*n, A is n*m and B is m*d"""
     mul_A = mpu.ColumnParallelLinear(n, m, bias=False, gather_output=False).cuda()
     mul_B = mpu.RowParallelLinear(m, d, bias=False, input_is_parallel=True).cuda()
     X = torch.randn(b, n).cuda()
     with torch.no_grad():
+        # warm up runs
         for _ in range(2):
             Y = mul_B(mul_A(X))
+        torch.cuda.synchronize()
         start_time = time.time()
+        total_reduce_time = 0.0
         for _ in range(repeat_times):
-            Y = mul_B(mul_A(X))
+            Y, reduce_time = mul_B(mul_A(X), return_reduce_time=True)
+            total_reduce_time += reduce_time
         torch.cuda.synchronize()
         total_time = time.time() - start_time
-        print("total_time", total_time, force=True)
+        print(b, n, m, d, total_time / repeat_times, reduce_time / repeat_times)
 
 
 
@@ -59,7 +64,9 @@ def distributed_main(process_idx, args):
     dist.all_reduce(torch.zeros(1).cuda())
     mpu.initialize_model_parallel(args.distributed_world_size)
     set_random_seed(1337)
-    measure_time(160, 160, 160, 160)
+    choice_list = [32, 128, 512, 2048, 8192]
+    for b, n, m, d in itertools.product(choice_list, choice_list, choice_list, choice_list):
+        measure_time(b, n, m, d)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@
 
 
 import math
+import time
 
 import torch
 import torch.nn.functional as F
@@ -314,7 +315,7 @@ class RowParallelLinear(torch.nn.Module):
             self.input_size_per_partition, 1, init_method,
             stride=stride, return_master_weight=keep_master_weight_for_test)
 
-    def forward(self, input_):
+    def forward(self, input_, return_reduce_time=False):
         # Set up backprop all-reduce.
         if self.input_is_parallel:
             input_parallel = input_
@@ -323,9 +324,18 @@ class RowParallelLinear(torch.nn.Module):
         # Matrix multiply.
         output_parallel = F.linear(input_parallel, self.weight)
         # All-reduce across all the partitions.
+        if return_reduce_time:
+            torch.cuda.synchronize()
+            start_time = time.time()
         output_ = reduce_from_model_parallel_region(output_parallel)
+        if return_reduce_time:
+            torch.cuda.synchronize()
+            reduce_time = time.time() - start_time
         if self.bias is not None:
             output = output_ + self.bias
         else:
             output = output_
-        return output
+        if return_reduce_time:
+            return output, reduce_time
+        else:
+            return output
