@@ -46,7 +46,7 @@ def measure_time(b, n, m, d, repeat_times=1000):
             total_reduce_time += reduce_time
         torch.cuda.synchronize()
         total_time = time.time() - start_time
-        print(b, n, m, d, total_time / repeat_times, reduce_time / repeat_times)
+        print(b, n, m, d, total_time / repeat_times, total_reduce_time / repeat_times)
 
 
 
