@@ -4,7 +4,7 @@ import mpu
 import argparse
 import numpy as np
 import random
-
+import time
 
 def suppress_output(rank):
     """Suppress printing on the current device. Force printing with `force=True`."""
@@ -28,12 +28,19 @@ def set_random_seed(seed):
     mpu.model_parallel_cuda_manual_seed(seed)
 
 
-def measure_time(b, n, m, d):
+def measure_time(b, n, m, d, repeat_times=100):
     """Test the running speed of Y=XAB where X is b*n, A is n*m and B is m*d"""
     mul_A = mpu.ColumnParallelLinear(n, m, bias=False, gather_output=False).cuda()
     mul_B = mpu.RowParallelLinear(m, d, bias=False, input_is_parallel=True).cuda()
     X = torch.randn(b, n).cuda()
-    print(X, force=True)
+    with torch.no_grad():
+        start_time = time.time()
+        for _ in range(repeat_times):
+            Y = mul_B(mul_A(X))
+        torch.cuda.synchronize()
+        total_time = time.time() - start_time
+        print("total_time", total_time, force=True)
+
 
 
 def distributed_main(process_idx, args):
