@@ -1,3 +1,5 @@
+import time
+
 import torch
 import torch.nn as nn
 import itertools
@@ -14,39 +16,74 @@ def gpipe_forward_and_backward(modules, chunks):
     for t in range(n_timesteps):
         for i in range(n_modules):
             if 0 <= t - i < n_chunks:
-                activations[t - i].append(modules[i](activations[t - i][-1]))
-    grad_activations = [torch.ones_like(a[-1]) for a in activations]
+                c = activations[t - i][-1].to('cuda:' + str(i), non_blocking=True)
+                activations[t - i].append(modules[i](c))
+
     # backward
+    grad_activations = [torch.ones_like(a[-1]) for a in activations]
     for t in reversed(range(n_timesteps)):
         for i in range(n_modules):
             if 0 <= t - i < n_chunks:
+                for p in modules[i].parameters():
+                    assert p.requires_grad
+                if activations[t - i][i].requires_grad:
+                    input_nodes = itertools.chain(modules[i].parameters(), [activations[t - i][i]])
+                else:
+                    input_nodes = modules[i].parameters()
+
                 all_grads = torch.autograd.grad(
                     outputs=activations[t - i][i + 1],
-                    inputs=itertools.chain(
-                        [activations[t - i][i]],
-                        modules[i].parameters()
-                    ),
+                    inputs=input_nodes,
                     grad_outputs=grad_activations[t - i]
                 )
-                grad_activations[t - i] = all_grads[0]
-                for param, grad in zip(modules[i].parameters(), all_grads[1:]):
+                if activations[t - i][i].requires_grad:
+                    grad_activations[t - i] = all_grads[-1]
+                # zip() will drop the last item of all_grads
+                for param, grad in zip(modules[i].parameters(), all_grads):
                     if param.grad is None:
                         param.grad = grad
                     else:
                         param.grad += grad
 
 
-if __name__ == "__main__":
-    seed = 1337
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+def run_gpipe(inputs, modules, pipeline_depth, repeat_times):
+    n = torch.cuda.device_count()
+    n_modules = len(modules)
+    splits = [n_modules // n + (n_modules % n <= i) for i in range(n)]
+    stages = []
+    for i in range(n):
+        s = n_modules // n + (i <= n_modules % n)
+        seq = nn.Sequential(*modules[:s])
+        seq.to('cuda:' + str(i))
+        stages.append(seq)
+        modules = modules[s:]
+    assert inputs.size(0) % pipeline_depth == 0
+    chunks = inputs.chunk(pipeline_depth, dim=0)
+    start = time.time()
+    torch.cuda.synchronize()
+    for _ in range(repeat_times):
+        gpipe_forward_and_backward(stages, chunks)
+    torch.cuda.synchronize()
+    return time.time() - start
 
-    linear1 = nn.Linear(10, 10)
-    linear2 = nn.Linear(10, 1)
-    x = torch.randn(2, 10, requires_grad=True)
-    # y = linear2(linear1(x)).sum()
-    # y.backward()
-    gpipe_forward_and_backward([linear1, linear2], [x[0], x[1]])
-    for param in linear1.parameters():
-        print(param, param.grad)
+
+
+def benchmark(batch_size, input_dimension, hidden_size, pipeline_depth, n_modules, repeat_times):
+    x = torch.rand(batch_size, input_dimension).to('cuda:0')
+    modules = []
+    for _ in range(n_modules):
+        modules.append(nn.Sequential(
+            nn.Linear(input_dimension, hidden_size, bias=False),
+            nn.Linear(hidden_size, input_dimension, bias=False),
+        ))
+    return run_gpipe(x, modules, pipeline_depth, repeat_times) / repeat_times
+
+
+if __name__ == "__main__":
+    r = benchmark(batch_size=128,
+                  input_dimension=512,
+                  hidden_size=1024,
+                  pipeline_depth=8,
+                  n_modules=20,
+                  repeat_times=1)
+    print(r)
