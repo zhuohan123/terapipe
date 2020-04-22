@@ -7,6 +7,7 @@ import random
 import time
 import itertools
 
+
 def suppress_output(rank):
     """Suppress printing on the current device. Force printing with `force=True`."""
     import builtins as __builtin__
@@ -47,7 +48,6 @@ def measure_time(b, n, m, d, repeat_times=1000):
         torch.cuda.synchronize()
         total_time = time.time() - start_time
         print(b, n, m, d, total_time / repeat_times, total_reduce_time / repeat_times)
-
 
 
 def distributed_main(process_idx, args):
