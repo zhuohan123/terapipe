@@ -20,30 +20,7 @@ def gpipe_forward_and_backward(modules, chunks):
                 activations[t - i].append(modules[i](c))
 
     # backward
-    grad_activations = [torch.ones_like(a[-1]) for a in activations]
-    for t in reversed(range(n_timesteps)):
-        for i in range(n_modules):
-            if 0 <= t - i < n_chunks:
-                for p in modules[i].parameters():
-                    assert p.requires_grad
-                if activations[t - i][i].requires_grad:
-                    input_nodes = itertools.chain(modules[i].parameters(), [activations[t - i][i]])
-                else:
-                    input_nodes = modules[i].parameters()
-
-                all_grads = torch.autograd.grad(
-                    outputs=activations[t - i][i + 1],
-                    inputs=input_nodes,
-                    grad_outputs=grad_activations[t - i]
-                )
-                if activations[t - i][i].requires_grad:
-                    grad_activations[t - i] = all_grads[-1]
-                # zip() will drop the last item of all_grads
-                for param, grad in zip(modules[i].parameters(), all_grads):
-                    if param.grad is None:
-                        param.grad = grad
-                    else:
-                        param.grad += grad
+    activations[-1][-1].sum().backward()
 
 
 def run_gpipe(inputs, modules, pipeline_depth, repeat_times):
