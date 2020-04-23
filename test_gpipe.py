@@ -11,16 +11,16 @@ def gpipe_forward_and_backward(modules, chunks):
     n_modules = len(modules)
     n_chunks = len(chunks)
     n_timesteps = n_modules + n_chunks - 1
-    activations = [[chunk] for chunk in chunks]
+    activations = list(chunks)
     # forward
     for t in range(n_timesteps):
         for i in range(n_modules):
             if 0 <= t - i < n_chunks:
-                c = activations[t - i][-1].to('cuda:' + str(i), non_blocking=True)
-                activations[t - i].append(modules[i](c))
+                c = activations[t - i].to('cuda:' + str(i), non_blocking=True)
+                activations[t - i] = modules[i](c)
 
     # backward
-    activations[-1][-1].sum().backward()
+    activations[-1].sum().backward()
 
 
 def run_gpipe(inputs, modules, pipeline_depth, repeat_times):
@@ -57,10 +57,6 @@ def benchmark(batch_size, input_dimension, hidden_size, pipeline_depth, n_module
 
 
 if __name__ == "__main__":
-    r = benchmark(batch_size=128,
-                  input_dimension=512,
-                  hidden_size=1024,
-                  pipeline_depth=8,
-                  n_modules=20,
-                  repeat_times=1)
-    print(r)
+    for i in range(12):
+        r = benchmark(batch_size=2048, input_dimension=4096, hidden_size=4096, pipeline_depth=2**i, n_modules=40, repeat_times=10)
+        print(2**i, r)
