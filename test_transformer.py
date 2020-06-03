@@ -1,8 +1,17 @@
 import time
+import random
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import mpu
+
+
+def set_random_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    # mpu.model_parallel_cuda_manual_seed(seed)
 
 
 class TransformerLayer(nn.Module):
@@ -17,7 +26,7 @@ class TransformerLayer(nn.Module):
     def forward(self, x, attn_mask):
         y = x
         x = self.attn_ln(x)
-        x, _ = self.attn(x, x, x, attn_mask=attn_mask)
+        x, attn_weight = self.attn(x, x, x, attn_mask=attn_mask)
         x = y + x
         y = x
         x = self.fc_ln(x)
@@ -28,8 +37,22 @@ class TransformerLayer(nn.Module):
         return x
 
 
-if __name__ == "__main__":
-    batch_size = 4
+class SingleDeviceTransformer(nn.Module):
+    def __init__(self, transformer_layers, seq_len):
+        super().__init__()
+        self.layers = nn.ModuleList(transformer_layers)
+        self.seq_len = seq_len
+        self.register_buffer("attn_mask", torch.triu(torch.full((seq_len, seq_len), -1e10), 1))
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x, self.attn_mask)
+        return x
+
+
+def main():
+    set_random_seed(0)
+    batch_size = 1
     seq_len = 32
     n_layers = 6
     embedding_dim = 128
@@ -39,8 +62,10 @@ if __name__ == "__main__":
         TransformerLayer(embedding_dim, ffn_embedding_dim, num_attention_heads)
         for _ in range(n_layers)
     ]
-    attn_mask = torch.tril(torch.ones(seq_len, seq_len))
+    single_device_transformer = SingleDeviceTransformer(transformer_layers, seq_len)
     x = torch.randn(seq_len, batch_size, embedding_dim)
-    for layer in transformer_layers:
-        x = layer(x, attn_mask)
-    print(x)
+    y = single_device_transformer(x)
+
+
+if __name__ == "__main__":
+    main()
