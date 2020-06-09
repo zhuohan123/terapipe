@@ -114,10 +114,9 @@ class TransformerLayer(nn.Module):
 
 
 class SingleDeviceTransformer(nn.Module):
-    def __init__(self, transformer_layers, seq_len):
+    def __init__(self, transformer_layers):
         super().__init__()
         self.layers = nn.ModuleList(transformer_layers)
-        self.seq_len = seq_len
 
     def forward(self, x, attn_caches=None):
         if attn_caches is None:
@@ -129,26 +128,49 @@ class SingleDeviceTransformer(nn.Module):
         return x, new_attn_caches
 
 
+class PipelinedTransformer(nn.Module):
+    def __init__(self, nested_transformer_layers):
+        super().__init__()
+        self.n_devices = len(nested_transformer_layers)
+        assert self.n_devices <= torch.cuda.device_count()
+        self.single_device_transformers = nn.ModuleList([
+            SingleDeviceTransformer(transformer_layers).to(torch.device(i))
+            for i, transformer_layers in enumerate(nested_transformer_layers)
+        ])
+
+    def forward(self, segmented_xs):
+        n_segments = len(segmented_xs)
+        n_timesteps = len(segmented_xs) + self.n_devices - 1
+        caches = [None] * self.n_devices
+        for t in range(n_timesteps):
+            for i in range(self.n_devices):
+                if 0 <= t - i < n_segments:
+                    x = segmented_xs[t - i].to(torch.device(i))
+                    x, cache = self.single_device_transformers[i](x, caches[i])
+                    caches[i] = cache
+                    segmented_xs[t - i] = x
+
+        return segmented_xs
+
+
 def main():
     set_random_seed(0)
     batch_size = 1
     seq_len = 32
-    n_layers = 6
+    n_layers = 8
     embedding_dim = 128
     ffn_embedding_dim = embedding_dim * 4
-    num_attention_heads = 1
+    num_attention_heads = 4
     transformer_layers = [
         TransformerLayer(embedding_dim, ffn_embedding_dim, num_attention_heads)
         for _ in range(n_layers)
     ]
-    single_device_transformer = SingleDeviceTransformer(transformer_layers, seq_len)
+    single_device_transformer = SingleDeviceTransformer(transformer_layers)
+    pipelined_transformer = PipelinedTransformer([transformer_layers[:4], transformer_layers[4:]])
     x = torch.randn(seq_len, batch_size, embedding_dim)
-    y0, cache0 = single_device_transformer(x)
-    d = 2
-    y1, cache1 = single_device_transformer(x[:d])
-    y2, cache2 = single_device_transformer(x[d :], cache1)
-    y3 = torch.cat((y1, y2), dim=0)
-    print(torch.abs(y0 - y3).mean())
+    y_single, _ = single_device_transformer(x)
+    y_pipelined = pipelined_transformer([x[:16], x[16:]])
+    print(y_single, y_pipelined)
 
 
 if __name__ == "__main__":
