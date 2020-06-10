@@ -155,22 +155,49 @@ class PipelinedTransformer(nn.Module):
 
 def main():
     set_random_seed(0)
+    time_testing_steps = 100
     batch_size = 1
-    seq_len = 32
-    n_layers = 8
-    embedding_dim = 128
+    seq_len = 1024
+    n_layers = 12
+    embedding_dim = 768
     ffn_embedding_dim = embedding_dim * 4
-    num_attention_heads = 4
+    num_attention_heads = 12
     transformer_layers = [
         TransformerLayer(embedding_dim, ffn_embedding_dim, num_attention_heads)
         for _ in range(n_layers)
     ]
-    single_device_transformer = SingleDeviceTransformer(transformer_layers)
-    pipelined_transformer = PipelinedTransformer([transformer_layers[:4], transformer_layers[4:]])
-    x = torch.randn(seq_len, batch_size, embedding_dim)
-    y_single, _ = single_device_transformer(x)
-    y_pipelined = pipelined_transformer([x[:16], x[16:]])
-    print(y_single, y_pipelined)
+    x = torch.randn(seq_len, batch_size, embedding_dim).cuda(0)
+    single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    torch.cuda.synchronize()
+    start = time.time()
+    for t in range(time_testing_steps):
+        single_device_transformer.zero_grad()
+        y, _ = single_device_transformer(x)
+        loss = torch.mean(y)
+        loss.backward()
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    print("single_device_time (per step):", duration / time_testing_steps)
+
+    n_devices = torch.cuda.device_count()
+    nested_layers = []
+    layer_idx = 0
+    for i in range(n_devices):
+        n_layers_device = n_layers // n_devices + int(i < n_layers % n_devices)
+        nested_layers.append(transformer_layers[layer_idx:layer_idx + n_layers_device])
+        layer_idx += n_layers_device
+    pipelined_transformer = PipelinedTransformer(nested_layers)
+
+    torch.cuda.synchronize()
+    start = time.time()
+    for t in range(time_testing_steps):
+        single_device_transformer.zero_grad()
+        y_pipelined = pipelined_transformer([x])
+        loss = torch.mean(torch.cat(y_pipelined, dim=0))
+        loss.backward()
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    print("pipelined_time (per step):", duration / time_testing_steps)
 
 
 if __name__ == "__main__":
