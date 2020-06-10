@@ -153,6 +153,17 @@ class PipelinedTransformer(nn.Module):
         return segmented_xs
 
 
+def uniform_slice(x, seq_len, n_slices):
+    slice_x = []
+    start_index = 0
+    for i in range(n_slices):
+        seq_len_slice = seq_len // n_slices + int(i < seq_len % n_slices)
+        slice_x.append(x[start_index:start_index + seq_len_slice])
+        start_index += seq_len_slice
+    assert start_index == seq_len
+    return slice_x
+
+
 def main():
     set_random_seed(0)
     time_testing_steps = 100
@@ -188,11 +199,12 @@ def main():
         layer_idx += n_layers_device
     pipelined_transformer = PipelinedTransformer(nested_layers)
 
+    slice_x = uniform_slice(x, seq_len, 16)
     torch.cuda.synchronize()
     start = time.time()
     for t in range(time_testing_steps):
         single_device_transformer.zero_grad()
-        y_pipelined = pipelined_transformer([x])
+        y_pipelined = pipelined_transformer(slice_x)
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
         loss.backward()
     torch.cuda.synchronize()
