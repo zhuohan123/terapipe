@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import mpu
+import itertools
 
 NEG_INF = -1e10
 
@@ -164,7 +165,60 @@ def uniform_slice(x, seq_len, n_slices):
     return slice_x
 
 
-def main():
+def unit_test_forward_time(
+    time_testing_steps=10,
+    batch_size=1,
+    n_layers=12,
+    embedding_dim=768,
+    seq_len=128,
+    cache_len=896,
+):
+    ffn_embedding_dim = embedding_dim * 4
+    assert embedding_dim % 64 == 0
+    num_attention_heads = embedding_dim // 64
+    transformer_layers = [
+        TransformerLayer(embedding_dim, ffn_embedding_dim, num_attention_heads)
+        for _ in range(n_layers)
+    ]
+    single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    x_cache = torch.randn(cache_len, batch_size, embedding_dim).cuda(0)
+    _, cache = single_device_transformer(x_cache)
+    x = torch.randn(seq_len, batch_size, embedding_dim).cuda(0)
+    # warm up
+    for t in range(2):
+        single_device_transformer.zero_grad()
+        y, _ = single_device_transformer(x, cache)
+    torch.cuda.synchronize()
+    start = time.time()
+    for t in range(time_testing_steps):
+        single_device_transformer.zero_grad()
+        y, _ = single_device_transformer(x, cache)
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    return duration / time_testing_steps
+
+
+def grid_search_forward_time():
+    n_layers_list = [3, 6, 12, 24]
+    embedding_dim_list = [768, 1024, 1536, 2048, 3072, 4096]
+    seq_len_list = [128, 256, 512, 1024]
+    cache_times_list = [0, 1, 2, 4, 8]
+    for n_layers, embedding_dim, seq_len, cache_times in itertools.product(
+        n_layers_list, embedding_dim_list, seq_len_list, cache_times_list
+    ):
+        try:
+            this_step_time = unit_test_forward_time(
+                n_layers=n_layers,
+                embedding_dim=embedding_dim,
+                seq_len=seq_len,
+                cache_len=cache_times * seq_len,
+            )
+        except:
+            this_step_time = None
+        print(n_layers, embedding_dim, seq_len, cache_times, this_step_time)
+
+
+def compare_single_device_and_pipeline():
     set_random_seed(0)
     time_testing_steps = 100
     batch_size = 1
@@ -213,4 +267,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    set_random_seed(0)
+    grid_search_forward_time()
