@@ -20,7 +20,7 @@ auth:
     ssh_user: ubuntu
 
 head_node:
-    InstanceType: p3.8xlarge
+    InstanceType: p3.16xlarge
     ImageId: latest_dlami
     # InstanceMarketOptions:
     #     MarketType: spot

@@ -223,7 +223,6 @@ def grid_search_forward_time():
 
 
 def compare_single_device_and_pipeline():
-    set_random_seed(0)
     time_testing_steps = 100
     batch_size = 1
     seq_len = 1024
@@ -261,7 +260,55 @@ def compare_single_device_and_pipeline():
     torch.cuda.synchronize()
     start = time.time()
     for t in range(time_testing_steps):
-        single_device_transformer.zero_grad()
+        pipelined_transformer.zero_grad()
+        y_pipelined = pipelined_transformer(slice_x)
+        loss = torch.mean(torch.cat(y_pipelined, dim=0))
+        loss.backward()
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    print("pipelined_time (per step):", duration / time_testing_steps)
+
+
+def compare_gpipe_and_pipeline():
+    time_testing_steps = 10
+    batch_size = 1
+    seq_len = 1024
+    n_layers = 72
+    embedding_dim = 3072
+    ffn_embedding_dim = embedding_dim * 4
+    num_attention_heads = 32
+    transformer_layers = [
+        TransformerLayer(embedding_dim, ffn_embedding_dim, num_attention_heads)
+        for _ in range(n_layers)
+    ]
+    x = torch.randn(seq_len, batch_size, embedding_dim).cuda(0)
+
+    n_devices = torch.cuda.device_count()
+    nested_layers = []
+    layer_idx = 0
+    for i in range(n_devices):
+        n_layers_device = n_layers // n_devices + int(i < n_layers % n_devices)
+        nested_layers.append(transformer_layers[layer_idx:layer_idx + n_layers_device])
+        layer_idx += n_layers_device
+    assert layer_idx == n_layers
+    pipelined_transformer = PipelinedTransformer(nested_layers)
+
+    torch.cuda.synchronize()
+    start = time.time()
+    for t in range(time_testing_steps):
+        pipelined_transformer.zero_grad()
+        y_pipelined = pipelined_transformer([x])
+        loss = torch.mean(torch.cat(y_pipelined, dim=0))
+        loss.backward()
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    print("gpipe_time (per step):", duration / time_testing_steps)
+
+    slice_x = uniform_slice(x, seq_len, 16)
+    torch.cuda.synchronize()
+    start = time.time()
+    for t in range(time_testing_steps):
+        pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer(slice_x)
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
         loss.backward()
@@ -272,4 +319,5 @@ def compare_single_device_and_pipeline():
 
 if __name__ == "__main__":
     set_random_seed(0)
-    grid_search_forward_time()
+    # grid_search_forward_time()
+    compare_gpipe_and_pipeline()
