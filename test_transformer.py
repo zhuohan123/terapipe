@@ -124,18 +124,23 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10):
 
 
 def gpipe_time(config: TransformerConfig, n_testing_steps=10):
+    print("gpipe_time")
+    print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs()
     x = x.cuda(0)
     nested_layers = uniform_slice_layers(transformer_layers)
     pipelined_transformer = PipelinedTransformer(nested_layers)
+    print("warmup rounds")
     for t in range(2):
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer([x])
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
         loss.backward()
     torch.cuda.synchronize()
+    print("start testing")
     start = time.time()
     for t in range(n_testing_steps):
+        print("step", t)
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer([x])
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
@@ -146,18 +151,23 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10):
 
 
 def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8):
+    print("seqpipe_time")
+    print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs()
     nested_layers = uniform_slice_layers(transformer_layers)
     pipelined_transformer = PipelinedTransformer(nested_layers)
-    sliced_x = uniform_slice_x(x.cuda(0), config.seq_len, n_slices)
+    sliced_x = uniform_slice_x(x.cuda(0), n_slices)
+    print("warmup rounds")
     for t in range(2):
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer(sliced_x)
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
         loss.backward()
     torch.cuda.synchronize()
+    print("start testing")
     start = time.time()
     for t in range(n_testing_steps):
+        print("step", t)
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer(sliced_x)
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
