@@ -181,8 +181,11 @@ def unit_test_forward_time(
         for _ in range(n_layers)
     ]
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
-    x_cache = torch.randn(cache_len, batch_size, embedding_dim).cuda(0)
-    _, cache = single_device_transformer(x_cache)
+    if cache_len > 0:
+        x_cache = torch.randn(cache_len, batch_size, embedding_dim).cuda(0)
+        _, cache = single_device_transformer(x_cache)
+    else:
+        cache = None
     x = torch.randn(seq_len, batch_size, embedding_dim).cuda(0)
     # warm up
     for t in range(2):
@@ -199,6 +202,7 @@ def unit_test_forward_time(
 
 
 def grid_search_forward_time():
+    print("grid_search_forward_time")
     n_layers_list = [3, 6, 12, 24]
     embedding_dim_list = [768, 1024, 1536, 2048, 3072, 4096]
     seq_len_list = [128, 256, 512, 1024]
