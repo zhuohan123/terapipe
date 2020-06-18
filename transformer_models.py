@@ -158,6 +158,8 @@ class PipelinedTransformer(nn.Module):
         ])
 
     def forward(self, segmented_xs):
+        # make a shallow copy, because we will edit the list in place
+        segmented_xs = segmented_xs.copy()
         n_segments = len(segmented_xs)
         n_timesteps = len(segmented_xs) + self.n_devices - 1
         caches = [None] * self.n_devices
