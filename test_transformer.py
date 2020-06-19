@@ -139,13 +139,16 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10):
     torch.cuda.synchronize()
     print("start testing")
     start = time.time()
-    for t in range(n_testing_steps):
-        print("step", t)
-        pipelined_transformer.zero_grad()
-        y_pipelined = pipelined_transformer([x])
-        loss = torch.mean(torch.cat(y_pipelined, dim=0))
-        loss.backward()
-    torch.cuda.synchronize()
+    with torch.autograd.profiler.profile(use_cuda=True) as prof:
+        for t in range(n_testing_steps):
+            print("step", t)
+            pipelined_transformer.zero_grad()
+            y_pipelined = pipelined_transformer([x])
+            loss = torch.mean(torch.cat(y_pipelined, dim=0))
+            loss.backward()
+        torch.cuda.synchronize()
+    prof.export_chrome_trace("gpipe.gtrace")
+    print(prof.key_averages().table())
     duration = time.time() - start
     return duration / n_testing_steps
 
@@ -166,20 +169,22 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8):
     torch.cuda.synchronize()
     print("start testing")
     start = time.time()
-    for t in range(n_testing_steps):
-        print("step", t)
-        pipelined_transformer.zero_grad()
-        y_pipelined = pipelined_transformer(sliced_x)
-        loss = torch.mean(torch.cat(y_pipelined, dim=0))
-        loss.backward()
-    torch.cuda.synchronize()
+    with torch.autograd.profiler.profile(use_cuda=True) as prof:
+        for t in range(n_testing_steps):
+            print("step", t)
+            pipelined_transformer.zero_grad()
+            y_pipelined = pipelined_transformer(sliced_x)
+            loss = torch.mean(torch.cat(y_pipelined, dim=0))
+            loss.backward()
+        torch.cuda.synchronize()
     duration = time.time() - start
+    prof.export_chrome_trace(f"seqpipe_{n_slices}.gtrace")
+    print(prof.key_averages().table())
     return duration / n_testing_steps
 
 
 if __name__ == "__main__":
     set_random_seed(0)
-    # grid_search_forward_time()
     config = TransformerConfig(
         batch_size=1,
         seq_len=1024,
