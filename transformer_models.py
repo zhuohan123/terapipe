@@ -2,6 +2,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import threading
+import queue
 
 NEG_INF = -1e10
 
@@ -159,17 +161,28 @@ class PipelinedTransformer(nn.Module):
 
     def forward(self, segmented_xs):
         # make a shallow copy, because we will edit the list in place
-        segmented_xs = segmented_xs.copy()
         n_segments = len(segmented_xs)
-        n_timesteps = len(segmented_xs) + self.n_devices - 1
-        caches = [None] * self.n_devices
-        for t in range(n_timesteps):
-            for i in range(self.n_devices):
-                if 0 <= t - i < n_segments:
-                    with torch.cuda.device(i):
-                        x = segmented_xs[t - i].to(torch.device(i), non_blocking=True)
-                        x, cache = self.single_device_transformers[i](x, caches[i])
-                        caches[i] = cache
-                        segmented_xs[t - i] = x
 
-        return segmented_xs
+        def _worker(device_id, model, my_queue, succ_queue):
+            with torch.cuda.device(device_id):
+                cache = None
+                for t in range(n_segments):
+                    x = my_queue.get()
+                    x, cache = model(x, cache)
+                    succ_queue.put(x)
+
+        all_queues = [queue.Queue() for _ in range(self.n_devices + 1)]
+        threads = [threading.Thread(target=_worker,
+                                    args=(i, self.single_device_transformers[i],
+                                          all_queues[i], all_queues[i + 1]))
+                   for i in range(self.n_devices)]
+        for x in segmented_xs:
+            all_queues[0].put(x)
+        for thread in threads:
+            thread.start()
+        results = []
+        for _ in range(n_segments):
+            results.append(all_queues[-1].get())
+        for thread in threads:
+            thread.join()
+        return results
