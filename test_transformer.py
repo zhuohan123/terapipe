@@ -123,7 +123,7 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10):
     return duration / n_testing_steps
 
 
-def gpipe_time(config: TransformerConfig, n_testing_steps=10):
+def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
     print("gpipe_time")
     print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs()
@@ -139,7 +139,7 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10):
     torch.cuda.synchronize()
     print("start testing")
     start = time.time()
-    with torch.autograd.profiler.profile(use_cuda=True) as prof:
+    with torch.autograd.profiler.profile(enabled=profile, use_cuda=True) as prof:
         for t in range(n_testing_steps):
             print("step", t)
             pipelined_transformer.zero_grad()
@@ -147,13 +147,15 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10):
             loss = torch.mean(torch.cat(y_pipelined, dim=0))
             loss.backward()
         torch.cuda.synchronize()
-    prof.export_chrome_trace("gpipe.gtrace")
-    print(prof.key_averages().table())
+    if profile:
+        print("writing trace to disk")
+        prof.export_chrome_trace("gpipe.gtrace")
+        print(prof.key_averages().table())
     duration = time.time() - start
     return duration / n_testing_steps
 
 
-def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8):
+def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, profile=False):
     print("seqpipe_time")
     print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs()
@@ -169,7 +171,7 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8):
     torch.cuda.synchronize()
     print("start testing")
     start = time.time()
-    with torch.autograd.profiler.profile(use_cuda=True) as prof:
+    with torch.autograd.profiler.profile(enabled=profile, use_cuda=True) as prof:
         for t in range(n_testing_steps):
             print("step", t)
             pipelined_transformer.zero_grad()
@@ -178,8 +180,10 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8):
             loss.backward()
         torch.cuda.synchronize()
     duration = time.time() - start
-    prof.export_chrome_trace(f"seqpipe_{n_slices}.gtrace")
-    print(prof.key_averages().table())
+    if profile:
+        print("writing trace to disk")
+        prof.export_chrome_trace(f"seqpipe_{n_slices}.gtrace")
+        print(prof.key_averages().table())
     return duration / n_testing_steps
 
 
