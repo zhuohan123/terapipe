@@ -166,9 +166,10 @@ class PipelinedTransformer(nn.Module):
         for t in range(n_timesteps):
             for i in range(self.n_devices):
                 if 0 <= t - i < n_segments:
-                    x = segmented_xs[t - i].to(torch.device(i), non_blocking=True)
-                    x, cache = self.single_device_transformers[i](x, caches[i])
-                    caches[i] = cache
-                    segmented_xs[t - i] = x
+                    with torch.cuda.device(i):
+                        x = segmented_xs[t - i].to(torch.device(i), non_blocking=True)
+                        x, cache = self.single_device_transformers[i](x, caches[i])
+                        caches[i] = cache
+                        segmented_xs[t - i] = x
 
         return segmented_xs
