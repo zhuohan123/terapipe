@@ -155,7 +155,7 @@ class PipelinedTransformer(nn.Module):
         self.n_devices = len(nested_transformer_layers)
         assert self.n_devices <= torch.cuda.device_count()
         self.single_device_transformers = nn.ModuleList([
-            SingleDeviceTransformer(transformer_layers).to(torch.device(i))
+            SingleDeviceTransformer(transformer_layers).to(torch.device(i), non_blocking=True)
             for i, transformer_layers in enumerate(nested_transformer_layers)
         ])
 
@@ -167,7 +167,7 @@ class PipelinedTransformer(nn.Module):
             with torch.cuda.device(device_id):
                 cache = None
                 for t in range(n_segments):
-                    x = my_queue.get()
+                    x = my_queue.get().to(device_id)
                     x, cache = model(x, cache)
                     succ_queue.put(x)
 
