@@ -182,7 +182,7 @@ class PipelinedTransformer(nn.Module):
             with torch.cuda.device(device_id):
                 cache = None
                 for t in range(n_segments):
-                    x = my_queue.get().to(device_id)
+                    x = my_queue.get().to(device_id, non_blocking=True)
                     x, cache = model(x, cache)
                     succ_queue.put(x)
 

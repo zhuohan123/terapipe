@@ -2,6 +2,7 @@ import time
 import random
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import mpu
@@ -13,11 +14,26 @@ from transformer_models import (
 )
 
 
+def suppress_output(rank):
+    """Suppress printing on the current device. Force printing with `force=True`."""
+    import builtins as __builtin__
+    builtin_print = __builtin__.print
+
+    def print(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        if force:
+            builtin_print("rank #%d:" % rank, *args, **kwargs)
+        elif rank == 0:
+            builtin_print(*args, **kwargs)
+
+    __builtin__.print = print
+
+
 def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    # mpu.model_parallel_cuda_manual_seed(seed)
+    mpu.model_parallel_cuda_manual_seed(seed)
 
 
 def uniform_slice_x(x, n_slices):
@@ -187,6 +203,33 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     return duration / n_testing_steps
 
 
+def megatron_main(distributed_rank, distributed_init_method, distributed_world_size, config):
+    dist.init_process_group(
+        backend='nccl',
+        init_method=distributed_init_method,
+        world_size=distributed_world_size,
+        rank=distributed_rank,
+    )
+    torch.cuda.set_device(distributed_rank)
+    suppress_output(distributed_rank)
+    # perform a dummy all-reduce to initialize the NCCL communicator
+    dist.all_reduce(torch.zeros(1).cuda())
+    mpu.initialize_model_parallel(distributed_world_size)
+    set_random_seed(0)
+    print("process rank", distributed_rank, force=True)
+
+
+def megatron_spawn_tasks(config):
+    port = random.randint(10000, 20000)
+    distributed_init_method = 'tcp://localhost:{port}'.format(port=port)
+    distributed_world_size = torch.cuda.device_count()
+    torch.multiprocessing.spawn(
+        megatron_main,
+        args=(distributed_init_method, distributed_world_size, config),
+        nprocs=distributed_world_size
+    )
+
+
 if __name__ == "__main__":
     set_random_seed(0)
     config = TransformerConfig(
@@ -204,3 +247,5 @@ if __name__ == "__main__":
         print("gpipe (s/it):", gpipe_time(config))
     elif sys.argv[1] == "seqpipe":
         print("seqpipe (s/it):", seqpipe_time(config))
+    elif sys.argv[1] == "megatron":
+        megatron_spawn_tasks(config)
