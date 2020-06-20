@@ -33,7 +33,6 @@ def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    mpu.model_parallel_cuda_manual_seed(seed)
 
 
 def uniform_slice_x(x, n_slices):
@@ -216,6 +215,7 @@ def megatron_main(distributed_rank, distributed_init_method, distributed_world_s
     dist.all_reduce(torch.zeros(1).cuda())
     mpu.initialize_model_parallel(distributed_world_size)
     set_random_seed(0)
+    mpu.model_parallel_cuda_manual_seed(0)
     print("process rank", distributed_rank, force=True)
 
 
