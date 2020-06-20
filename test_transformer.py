@@ -126,7 +126,7 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10):
 def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
     print("gpipe_time")
     print("preparing layers and inputs")
-    transformer_layers, x = config.create_layers_and_inputs()
+    transformer_layers, x = config.create_layers_and_inputs_on_gpu()
     x = x.cuda(0)
     nested_layers = uniform_slice_layers(transformer_layers)
     pipelined_transformer = PipelinedTransformer(nested_layers)
@@ -158,7 +158,7 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
 def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, profile=False):
     print("seqpipe_time")
     print("preparing layers and inputs")
-    transformer_layers, x = config.create_layers_and_inputs()
+    transformer_layers, x = config.create_layers_and_inputs_on_gpu()
     nested_layers = uniform_slice_layers(transformer_layers)
     pipelined_transformer = PipelinedTransformer(nested_layers)
     sliced_x = uniform_slice_x(x.cuda(0), n_slices)

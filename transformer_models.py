@@ -37,17 +37,32 @@ class TransformerConfig:
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim)
         return transformer_layers, x
 
+    def create_layers_and_inputs_on_gpu(self, n_devices=None):
+        if n_devices is None:
+            n_devices = torch.cuda.device_count()
+        transformer_layers = [
+            TransformerLayer(
+                self.embedding_dim,
+                self.ffn_embedding_dim,
+                self.num_attention_heads,
+                device='cuda:' + str(i // (self.n_layers // n_devices)),
+            )
+            for i in range(self.n_layers)
+        ]
+        x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim, device='cuda:0')
+        return transformer_layers, x
+
 
 class MultiheadLMAttentionWithCache(nn.Module):
-    def __init__(self, embed_dim, num_heads, bias=True):
+    def __init__(self, embed_dim, num_heads, bias=True, device='cpu'):
         super().__init__()
 
         self.embed_dim = embed_dim
 
-        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
+        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
 
         nn.init.xavier_uniform_(self.k_proj.weight, gain=1 / math.sqrt(2))
         nn.init.xavier_uniform_(self.v_proj.weight, gain=1 / math.sqrt(2))
@@ -111,13 +126,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-    def __init__(self, embedding_dim, ffn_embedding_dim, num_attention_heads):
+    def __init__(self, embedding_dim, ffn_embedding_dim, num_attention_heads, device='cpu'):
         super().__init__()
         self.attn_ln = nn.LayerNorm(embedding_dim)
-        self.attn = MultiheadLMAttentionWithCache(embedding_dim, num_attention_heads)
+        self.attn = MultiheadLMAttentionWithCache(embedding_dim, num_attention_heads, device=device)
         self.fc_ln = nn.LayerNorm(embedding_dim)
-        self.fc1 = nn.Linear(embedding_dim, ffn_embedding_dim)
-        self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim)
+        self.fc1 = nn.Linear(embedding_dim, ffn_embedding_dim).to(device)
+        self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
     def forward(self, x, attn_cache=None):
         seq_len, batch_size, _ = x.size()
