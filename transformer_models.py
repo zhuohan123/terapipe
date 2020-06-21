@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import threading
 import queue
+import mpu
 
 NEG_INF = -1e10
 
@@ -125,7 +126,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
         attn_weights += attn_mask[None, :, :]
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
         attn = torch.bmm(attn_probs, v)
-        attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
+        attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, -1)
         attn = self.out_proj(attn)
 
         return attn, new_cache
@@ -153,6 +154,45 @@ class TransformerLayer(nn.Module):
         x = self.fc2(x)
         x = y + x
         return x, new_attn_cache
+
+
+class ModelParallelMultiheadLMAttentionWithCache(MultiheadLMAttentionWithCache):
+    def __init__(self, embed_dim, num_heads, bias=True, device='cpu'):
+        nn.Module.__init__(self)
+
+        self.embed_dim = embed_dim
+
+        self.k_proj = mpu.ColumnParallelLinear(embed_dim, embed_dim, bias=bias, gather_output=False).to(device)
+        self.v_proj = mpu.ColumnParallelLinear(embed_dim, embed_dim, bias=bias, gather_output=False).to(device)
+        self.q_proj = mpu.ColumnParallelLinear(embed_dim, embed_dim, bias=bias, gather_output=False).to(device)
+        self.out_proj = mpu.RowParallelLinear(embed_dim, embed_dim, bias=bias, input_is_parallel=True).to(device)
+
+        self.model_parallel_size = mpu.get_model_parallel_world_size()
+
+        self.num_total_heads = num_heads
+        self.num_heads = self.num_total_heads // self.model_parallel_size
+        assert (
+                self.num_heads_partition * self.model_parallel_size == num_heads
+        ), "Number of heads must be divisble by model parallel size"
+
+        self.head_dim = embed_dim // num_heads
+        assert (
+            self.head_dim * num_heads == self.embed_dim
+        ), "embed_dim must be divisible by num_heads"
+        self.scaling = self.head_dim ** -0.5
+
+
+class ModelParallelTransformerLayer(TransformerLayer):
+    def __init__(self, embedding_dim, ffn_embedding_dim, num_attention_heads, device='cpu'):
+        nn.Module.__init__(self)
+        self.model_parallel_size = mpu.get_model_parallel_world_size()
+        assert ffn_embedding_dim % self.model_parallel_size == 0
+
+        self.attn_ln = nn.LayerNorm(embedding_dim).to(device)
+        self.attn = ModelParallelMultiheadLMAttentionWithCache(embedding_dim, num_attention_heads, device=device)
+        self.fc_ln = nn.LayerNorm(embedding_dim).to(device)
+        self.fc1 = mpu.ColumnParallelLinear(embedding_dim, ffn_embedding_dim, gather_output=False).to(device)
+        self.fc2 = mpu.RowParallelLinear(ffn_embedding_dim, embedding_dim, input_is_parallel=True).to(device)
 
 
 class SingleDeviceTransformer(nn.Module):

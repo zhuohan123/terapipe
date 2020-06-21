@@ -11,7 +11,8 @@ import itertools
 import sys
 from transformer_models import (
     TransformerConfig, TransformerLayer,
-    SingleDeviceTransformer, PipelinedTransformer
+    SingleDeviceTransformer, PipelinedTransformer,
+    ModelParallelTransformerLayer
 )
 
 
@@ -202,7 +203,8 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     return duration / n_testing_steps
 
 
-def megatron_main(distributed_rank, distributed_init_method, distributed_world_size, config):
+def megatron_main(distributed_rank, distributed_init_method, distributed_world_size,
+                  config: TransformerConfig, n_testing_steps=10, profile=False):
     dist.init_process_group(
         backend='nccl',
         init_method=distributed_init_method,
@@ -216,7 +218,39 @@ def megatron_main(distributed_rank, distributed_init_method, distributed_world_s
     mpu.initialize_model_parallel(distributed_world_size)
     set_random_seed(0)
     mpu.model_parallel_cuda_manual_seed(0)
-    print("process rank", distributed_rank, force=True)
+    transformer_layers = [
+        ModelParallelTransformerLayer(
+            config.embedding_dim,
+            config.ffn_embedding_dim,
+            config.num_attention_heads,
+            device="cuda",
+        )
+        for _ in range(config.n_layers)
+    ]
+    transformer = SingleDeviceTransformer(transformer_layers)
+    x = torch.randn(config.seq_len, config.batch_size, config.embedding_dim, device="cuda")
+    print("warmup rounds")
+    for t in range(2):
+        transformer.zero_grad()
+        y = transformer(x)
+        loss = torch.mean(y)
+        loss.backward()
+    torch.cuda.synchronize()
+    print("start testing")
+    start = time.time()
+    with torch.autograd.profiler.profile(enabled=profile, use_cuda=True) as prof:
+        for t in range(n_testing_steps):
+            transformer.zero_grad()
+            y = transformer(x)
+            loss = torch.mean(y)
+            loss.backward()
+        torch.cuda.synchronize()
+    if profile:
+        print("writing trace to disk")
+        prof.export_chrome_trace("gpipe.gtrace")
+        print(prof.key_averages().table())
+    duration = time.time() - start
+    print("megatron (s/it):", duration / n_testing_steps)
 
 
 def megatron_spawn_tasks(config):
