@@ -142,9 +142,8 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
     print("gpipe_time")
     print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs_on_gpu()
-    x = x.cuda(0)
     nested_layers = uniform_slice_layers(transformer_layers)
-    pipelined_transformer = PipelinedTransformer(nested_layers)
+    pipelined_transformer = PipelinedTransformer(nested_layers, config)
     print("warmup rounds")
     for t in range(2):
         pipelined_transformer.zero_grad()
@@ -175,8 +174,8 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs_on_gpu()
     nested_layers = uniform_slice_layers(transformer_layers)
-    pipelined_transformer = PipelinedTransformer(nested_layers)
-    sliced_x = uniform_slice_x(x.cuda(0), n_slices)
+    pipelined_transformer = PipelinedTransformer(nested_layers, config)
+    sliced_x = uniform_slice_x(x, n_slices)
     print("warmup rounds")
     for t in range(2):
         pipelined_transformer.zero_grad()
@@ -237,6 +236,7 @@ if __name__ == "__main__":
         seq_len=1024,
         n_layers=72,
         embedding_dim=2048,
+        placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
     )
     assert len(sys.argv) > 1
     if sys.argv[1] == "gridsearch":

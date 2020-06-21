@@ -17,6 +17,8 @@ class TransformerConfig:
         embedding_dim=768,
         ffn_embedding_dim=None,
         num_attention_heads=None,
+        placement_orders=None,
+        n_devices=None,
     ):
         self.batch_size = batch_size
         self.seq_len = seq_len
@@ -24,6 +26,9 @@ class TransformerConfig:
         self.embedding_dim = embedding_dim
         self.ffn_embedding_dim = ffn_embedding_dim if ffn_embedding_dim else embedding_dim * 4
         self.num_attention_heads = num_attention_heads if num_attention_heads else embedding_dim // 64
+        self.n_devices = torch.cuda.device_count() if n_devices is None else n_devices
+        assert self.n_devices <= torch.cuda.device_count()
+        self.placement_orders = placement_orders or list(range(self.n_devices))
 
     def create_layers_and_inputs(self):
         transformer_layers = [
@@ -37,19 +42,20 @@ class TransformerConfig:
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim)
         return transformer_layers, x
 
-    def create_layers_and_inputs_on_gpu(self, n_devices=None):
-        if n_devices is None:
-            n_devices = torch.cuda.device_count()
+    def create_layers_and_inputs_on_gpu(self):
+        assert self.n_layers % self.n_devices == 0
+        print("Use placement orders: ", self.placement_orders)
+        layers_per_device = self.n_layers // self.n_devices
         transformer_layers = [
             TransformerLayer(
                 self.embedding_dim,
                 self.ffn_embedding_dim,
                 self.num_attention_heads,
-                device='cuda:' + str(i // (self.n_layers // n_devices)),
+                device='cuda:' + str(self.placement_orders[i // layers_per_device]),
             )
             for i in range(self.n_layers)
         ]
-        x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim, device='cuda:0')
+        x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim, device='cuda:' + str(self.placement_orders[0]))
         return transformer_layers, x
 
 
@@ -128,9 +134,9 @@ class MultiheadLMAttentionWithCache(nn.Module):
 class TransformerLayer(nn.Module):
     def __init__(self, embedding_dim, ffn_embedding_dim, num_attention_heads, device='cpu'):
         super().__init__()
-        self.attn_ln = nn.LayerNorm(embedding_dim)
+        self.attn_ln = nn.LayerNorm(embedding_dim).to(device)
         self.attn = MultiheadLMAttentionWithCache(embedding_dim, num_attention_heads, device=device)
-        self.fc_ln = nn.LayerNorm(embedding_dim)
+        self.fc_ln = nn.LayerNorm(embedding_dim).to(device)
         self.fc1 = nn.Linear(embedding_dim, ffn_embedding_dim).to(device)
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
@@ -165,13 +171,12 @@ class SingleDeviceTransformer(nn.Module):
 
 
 class PipelinedTransformer(nn.Module):
-    def __init__(self, nested_transformer_layers):
+    def __init__(self, nested_transformer_layers, config):
         super().__init__()
-        self.n_devices = len(nested_transformer_layers)
-        assert self.n_devices <= torch.cuda.device_count()
+        self.config = config
+        assert len(nested_transformer_layers) == config.n_devices
         self.single_device_transformers = nn.ModuleList([
-            SingleDeviceTransformer(transformer_layers).to(torch.device(i), non_blocking=True)
-            for i, transformer_layers in enumerate(nested_transformer_layers)
+            SingleDeviceTransformer(transformer_layers) for transformer_layers in nested_transformer_layers
         ])
 
     def forward(self, segmented_xs):
@@ -186,11 +191,11 @@ class PipelinedTransformer(nn.Module):
                     x, cache = model(x, cache)
                     succ_queue.put(x)
 
-        all_queues = [queue.Queue() for _ in range(self.n_devices + 1)]
+        all_queues = [queue.Queue() for _ in range(self.config.n_devices + 1)]
         threads = [threading.Thread(target=_worker,
-                                    args=(i, self.single_device_transformers[i],
+                                    args=(self.config.placement_orders[i], self.single_device_transformers[i],
                                           all_queues[i], all_queues[i + 1]))
-                   for i in range(self.n_devices)]
+                   for i in range(self.config.n_devices)]
         for x in segmented_xs:
             all_queues[0].put(x)
         for thread in threads:
