@@ -66,15 +66,12 @@ class MultiheadLMAttentionWithCache(nn.Module):
 
         self.embed_dim = embed_dim
 
-        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
-        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
-        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
+        self.in_proj = nn.Linear(embed_dim, embed_dim * 3, bias=bias).to(device)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
 
-        nn.init.xavier_uniform_(self.k_proj.weight, gain=1 / math.sqrt(2))
-        nn.init.xavier_uniform_(self.v_proj.weight, gain=1 / math.sqrt(2))
-        nn.init.xavier_uniform_(self.q_proj.weight, gain=1 / math.sqrt(2))
+        nn.init.xavier_uniform_(self.in_proj.weight, gain=1 / math.sqrt(2))
         nn.init.xavier_uniform_(self.out_proj.weight)
+        # TODO(Siyuan): should we initialize the bias of in_proj?
         if self.out_proj.bias is not None:
             nn.init.constant_(self.out_proj.bias, 0.)
 
@@ -88,25 +85,8 @@ class MultiheadLMAttentionWithCache(nn.Module):
     def forward(self, x, cache=None):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
-        q = self.q_proj(x)
-        k = self.k_proj(x)
-        v = self.v_proj(x)
+        q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose(0, 1).chunk(3, dim=-1)
         q *= self.scaling
-        q = (
-            q.contiguous()
-            .view(tgt_len, bsz * self.num_heads, self.head_dim)
-            .transpose(0, 1)
-        )
-        k = (
-            k.contiguous()
-            .view(tgt_len, bsz * self.num_heads, self.head_dim)
-            .transpose(0, 1)
-        )
-        v = (
-            v.contiguous()
-            .view(tgt_len, bsz * self.num_heads, self.head_dim)
-            .transpose(0, 1)
-        )
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu(1)
         src_len = tgt_len
         if cache is not None:
