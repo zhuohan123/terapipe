@@ -13,14 +13,15 @@ max_workers: 0
 provider:
     type: aws
     region: us-west-2
-    availability_zone: us-west-2a
+    availability_zone: us-west-2c
+    cache_stopped_nodes: False
 
 # How Ray will authenticate with newly launched nodes.
 auth:
     ssh_user: ubuntu
 
 head_node:
-    InstanceType: p3.16xlarge
+    InstanceType: p3dn.24xlarge
     ImageId: latest_dlami
     # InstanceMarketOptions:
     #     MarketType: spot

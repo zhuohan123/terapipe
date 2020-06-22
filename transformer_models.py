@@ -69,11 +69,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
         self.in_proj = nn.Linear(embed_dim, embed_dim * 3, bias=bias).to(device)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
 
-        nn.init.xavier_uniform_(self.in_proj.weight, gain=1 / math.sqrt(2))
-        nn.init.xavier_uniform_(self.out_proj.weight)
-        # TODO(Siyuan): should we initialize the bias of in_proj?
-        if self.out_proj.bias is not None:
-            nn.init.constant_(self.out_proj.bias, 0.)
+        # TODO: initialize the weights correctly
 
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
@@ -142,9 +138,7 @@ class ModelParallelMultiheadLMAttentionWithCache(MultiheadLMAttentionWithCache):
 
         self.embed_dim = embed_dim
 
-        self.k_proj = mpu.ColumnParallelLinear(embed_dim, embed_dim, bias=bias, gather_output=False).to(device)
-        self.v_proj = mpu.ColumnParallelLinear(embed_dim, embed_dim, bias=bias, gather_output=False).to(device)
-        self.q_proj = mpu.ColumnParallelLinear(embed_dim, embed_dim, bias=bias, gather_output=False).to(device)
+        self.in_proj = mpu.ColumnParallelLinear(embed_dim, 3 * embed_dim, bias=bias, gather_output=False).to(device)
         self.out_proj = mpu.RowParallelLinear(embed_dim, embed_dim, bias=bias, input_is_parallel=True).to(device)
 
         self.model_parallel_size = mpu.get_model_parallel_world_size()
@@ -152,7 +146,7 @@ class ModelParallelMultiheadLMAttentionWithCache(MultiheadLMAttentionWithCache):
         self.num_total_heads = num_heads
         self.num_heads = self.num_total_heads // self.model_parallel_size
         assert (
-                self.num_heads_partition * self.model_parallel_size == num_heads
+                self.num_heads * self.model_parallel_size == num_heads
         ), "Number of heads must be divisble by model parallel size"
 
         self.head_dim = embed_dim // num_heads
