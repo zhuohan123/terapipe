@@ -232,7 +232,7 @@ def megatron_main(distributed_rank, distributed_init_method, distributed_world_s
     print("warmup rounds")
     for t in range(2):
         transformer.zero_grad()
-        y = transformer(x)
+        y, _ = transformer(x)
         loss = torch.mean(y)
         loss.backward()
     torch.cuda.synchronize()
@@ -241,7 +241,7 @@ def megatron_main(distributed_rank, distributed_init_method, distributed_world_s
     with torch.autograd.profiler.profile(enabled=profile, use_cuda=True) as prof:
         for t in range(n_testing_steps):
             transformer.zero_grad()
-            y = transformer(x)
+            y, _ = transformer(x)
             loss = torch.mean(y)
             loss.backward()
         torch.cuda.synchronize()
