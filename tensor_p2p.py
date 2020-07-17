@@ -36,7 +36,7 @@ class Communicator:
         return prev_ep
 
     async def call_func(self):
-        prev_ep = self.get_prev_ep()
+        prev_ep = await self.get_prev_ep()
         await self.func(prev_ep, None)
         if prev_ep:
             await prev_ep.close()
