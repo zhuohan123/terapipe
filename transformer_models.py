@@ -192,7 +192,7 @@ class StreamCopyQueue:
 
     def put(self, x):
         with torch.cuda.stream(self.stream):
-            x = x.to(device_id, non_blocking=True)
+            x = x.to(self.next_device, non_blocking=True)
             event = self.stream.record_event()
         self.queue.put((x, event))
 
