@@ -185,8 +185,8 @@ class SingleDeviceTransformer(nn.Module):
 
 
 class StreamCopyQueue:
-    def __init__(self, next_device):
-        self.stream = torch.cuda.Stream(next_device)
+    def __init__(self, current_device, next_device):
+        self.stream = torch.cuda.Stream(current_device)
         self.queue = queue.Queue()
         self.next_device = next_device
 
@@ -222,7 +222,10 @@ class PipelinedTransformer(nn.Module):
                     x, cache = model(x, cache)
                     succ_queue.put(x)
         all_queues = [queue.Queue()]
-        all_queues += [StreamCopyQueue(torch.device(f'cuda:{self.config.placement_orders[i]}')) for i in range(1, self.config.n_devices)]
+        for i in range(1, self.config.n_devices):
+            current_device = torch.device(f'cuda:{self.config.placement_orders[i-1]}')
+            next_device = torch.device(f'cuda:{self.config.placement_orders[i]}')
+            all_queues.append(StreamCopyQueue(current_device, next_device))
         all_queues.append(queue.Queue())
         threads = [threading.Thread(target=_worker,
                                     args=(self.config.placement_orders[i], self.single_device_transformers[i],
