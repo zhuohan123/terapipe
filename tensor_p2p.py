@@ -28,8 +28,10 @@ class Communicator:
 
     async def get_prev_ep(self):
         if self.prev_address is not None:
+            print("has previous node")
             prev_ep = await ucp.create_endpoint(self.prev_address, self.port)
         else:
+            print("does not have previous node")
             prev_ep = None
         return prev_ep
 
@@ -42,9 +44,11 @@ class Communicator:
     async def start(self):
         lf = ucp.create_listener(self.call_back, self.port) if self.my_address else None
         if lf:
+            print("has next node")
             while not lf.closed():
                 await asyncio.sleep(0.1)
         else:
+            print("does not have next node")
             await self.call_func()
 
     async def call_back(self, next_ep):
