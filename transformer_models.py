@@ -184,6 +184,24 @@ class SingleDeviceTransformer(nn.Module):
         return x, new_attn_caches
 
 
+class StreamCopyQueue:
+    def __init__(self, next_device):
+        self.stream = torch.cuda.Stream()
+        self.queue = queue.Queue()
+        self.next_device = next_device
+
+    def put(self, x):
+        with torch.cuda.stream(self.stream):
+            x = x.to(device_id, non_blocking=True)
+            event = self.stream.record_event()
+        self.queue.put((x, event))
+
+    def get(self):
+        x, event = self.queue.get()
+        torch.cuda.current_stream().wait_event(event)
+        return x
+
+
 class PipelinedTransformer(nn.Module):
     def __init__(self, nested_transformer_layers, config):
         super().__init__()
@@ -200,11 +218,12 @@ class PipelinedTransformer(nn.Module):
             with torch.cuda.device(device_id):
                 cache = None
                 for t in range(n_segments):
-                    x = my_queue.get().to(device_id, non_blocking=True)
+                    x = my_queue.get()
                     x, cache = model(x, cache)
                     succ_queue.put(x)
-
-        all_queues = [queue.Queue() for _ in range(self.config.n_devices + 1)]
+        all_queues = [queue.Queue()]
+        all_queues += [StreamCopyQueue(torch.device(f'cuda:{i}')) for i in range(1, self.config.n_devices)]
+        all_queues.append(queue.Queue())
         threads = [threading.Thread(target=_worker,
                                     args=(self.config.placement_orders[i], self.single_device_transformers[i],
                                           all_queues[i], all_queues[i + 1]))
