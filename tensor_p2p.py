@@ -35,9 +35,9 @@ class Communicator:
             prev_ep = None
         return prev_ep
 
-    async def call_func(self):
+    async def call_func(self, next_ep=None):
         prev_ep = await self.get_prev_ep()
-        await self.func(prev_ep, None)
+        await self.func(prev_ep, next_ep)
         if prev_ep:
             await prev_ep.close()
 
@@ -52,7 +52,7 @@ class Communicator:
             await self.call_func()
 
     async def call_back(self, next_ep):
-        await self.call_func()
+        await self.call_func(next_ep)
         await next_ep.close()
 
     def run(self):
