@@ -21,7 +21,7 @@ auth:
     ssh_user: ubuntu
 
 head_node:
-    InstanceType: p3dn.24xlarge
+    InstanceType: p2.xlarge
     ImageId: latest_dlami
     # InstanceMarketOptions:
     #     MarketType: spot
@@ -48,7 +48,7 @@ worker_nodes:
 
 setup_commands:
     # This replaces the standard anaconda Ray installation
-    - ray || pip install -U https://s3-us-west-2.amazonaws.com/ray-wheels/latest/ray-0.9.0.dev0-cp36-cp36m-manylinux1_x86_64.whl
-    - pip install torch==1.5.0+cu101 torchvision==0.6.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+    - ray || pip install -U ray
+    - pip install torch==1.5.1+cu101 torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
 
 

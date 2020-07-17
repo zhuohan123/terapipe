@@ -5,6 +5,20 @@ import ucp
 import numpy as np
 
 
+def run(aw):
+    if sys.version_info >= (3, 7):
+        return asyncio.run(aw)
+
+    # Emulate asyncio.run() on older versions
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(aw)
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
 class Communicator:
     def __init__(self, func, my_address=None, prev_address=None, port=13337):
         self.func = func
@@ -39,7 +53,7 @@ class Communicator:
         await next_ep.close()
 
     def run(self):
-        asyncio.run(self.start())
+        run(self.start())
 
 
 n_bytes = 100
