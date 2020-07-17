@@ -186,7 +186,7 @@ class SingleDeviceTransformer(nn.Module):
 
 class StreamCopyQueue:
     def __init__(self, next_device):
-        self.stream = torch.cuda.Stream()
+        self.stream = torch.cuda.Stream(next_device)
         self.queue = queue.Queue()
         self.next_device = next_device
 
