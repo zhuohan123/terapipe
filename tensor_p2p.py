@@ -42,10 +42,10 @@ class Communicator:
             await prev_ep.close()
 
     async def start(self):
-        lf = ucp.create_listener(self.call_back, self.port) if self.my_address else None
-        if lf:
+        self.lf = ucp.create_listener(self.call_back, self.port) if self.my_address else None
+        if self.lf:
             print("has next node")
-            while not lf.closed():
+            while not self.lf.closed():
                 await asyncio.sleep(0.1)
         else:
             print("does not have next node")
@@ -54,6 +54,7 @@ class Communicator:
     async def call_back(self, next_ep):
         await self.call_func(next_ep)
         await next_ep.close()
+        self.lf.close()
 
     def run(self):
         run(self.start())
