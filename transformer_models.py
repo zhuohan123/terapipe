@@ -222,7 +222,7 @@ class PipelinedTransformer(nn.Module):
                     x, cache = model(x, cache)
                     succ_queue.put(x)
         all_queues = [queue.Queue()]
-        all_queues += [StreamCopyQueue(torch.device(f'cuda:{i}')) for i in range(1, self.config.n_devices)]
+        all_queues += [StreamCopyQueue(torch.device(f'cuda:{self.config.placement_orders[i]}')) for i in range(1, self.config.n_devices)]
         all_queues.append(queue.Queue())
         threads = [threading.Thread(target=_worker,
                                     args=(self.config.placement_orders[i], self.single_device_transformers[i],
