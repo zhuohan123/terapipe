@@ -2,6 +2,7 @@
 #include <torch/torch.h>
 
 #define NEG_INF -1e10
+using torch::Tensor;
 
 struct AttentionCache {
   AttentionCache(const Tensor &key, const Tensor& value) : k(key), v(value) {}
