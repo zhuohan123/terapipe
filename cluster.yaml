@@ -23,8 +23,8 @@ auth:
 head_node:
     InstanceType: p3dn.24xlarge
     ImageId: latest_dlami
-    # InstanceMarketOptions:
-    #     MarketType: spot
+    InstanceMarketOptions:
+        MarketType: spot
     BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
