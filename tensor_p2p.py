@@ -5,31 +5,20 @@ import ucp
 import numpy as np
 
 
-def run(aw):
-    if sys.version_info >= (3, 7):
-        return asyncio.run(aw)
-
-    # Emulate asyncio.run() on older versions
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(aw)
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
-
-
 class Communicator:
-    def __init__(self, func, my_address=None, prev_address=None, port=13337):
+    def __init__(self, func, my_address=None, my_port=13337, prev_address=None, prev_port=13338):
         self.func = func
         self.my_address = my_address
+        self.my_port = my_port
         self.prev_address = prev_address
-        self.port = port
+        self.prev_port = prev_port
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
 
     async def get_prev_ep(self):
         if self.prev_address is not None:
             print("has previous node")
-            prev_ep = await ucp.create_endpoint(self.prev_address, self.port)
+            prev_ep = await ucp.create_endpoint(self.prev_address, self.prev_port)
         else:
             print("does not have previous node")
             prev_ep = None
@@ -42,7 +31,7 @@ class Communicator:
             await prev_ep.close()
 
     async def start(self):
-        self.lf = ucp.create_listener(self.call_back, self.port) if self.my_address else None
+        self.lf = ucp.create_listener(self.call_back, self.my_port) if self.my_address else None
         if self.lf:
             print("has next node")
             while not self.lf.closed():
@@ -57,7 +46,11 @@ class Communicator:
         self.lf.close()
 
     def run(self):
-        run(self.start())
+        try:
+            return self.loop.run_until_complete(self.start())
+        finally:
+            self.loop.close()
+            asyncio.set_event_loop(None)
 
 
 n_bytes = 100
