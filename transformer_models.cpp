@@ -113,18 +113,18 @@ struct SingleDeviceGPT : torch::nn::Module {
                   const torch::Device &device) {
     register_module("layers", layers);
     for (int i = 0; i < n_layers; i++) {
-      layers.push_back(TransformerLayer(embedding_dim, num_attention_heads, ffn_embedding_dim, device));
+      layers->push_back(TransformerLayer(embedding_dim, num_attention_heads, ffn_embedding_dim, device));
     }
   }
 
   SingleDeviceAttentionTuple forward(torch::Tensor x, std::vector<std::unique_ptr<AttentionCache>> &&attn_caches) {
     std::vector<std::unique_ptr<AttentionCache>> new_attn_caches;
-    int size = layers.size();
+    int size = layers->size();
     if (attn_caches.empty()) {
       attn_caches.resize(size);
     }
     for (int i = 0; i < size; i++) {
-      auto result = layers[i]->as<TransformerLayer>()(x, std::move(new_attn_caches[i]));
+      auto result = layers[i]->as<TransformerLayer>()->forward(x, std::move(new_attn_caches[i]));
       x = std::get<0>(result);
       new_attn_caches.push_back(std::move(std::get<1>(result)));
     }
@@ -132,7 +132,7 @@ struct SingleDeviceGPT : torch::nn::Module {
   }
 
   torch::nn::ModuleList layers;
-}
+};
 
 struct MultiDeviceGPT : torch::nn::Module {
   MultiDeviceGPT(int n_devices, int n_layers, int embedding_dim, int num_attention_heads, int ffn_embedding_dim) {
@@ -147,8 +147,8 @@ struct MultiDeviceGPT : torch::nn::Module {
   }
 
   std::vector<std::shared_ptr<SingleDeviceGPT>> segments;
-  std::vector<ConsumerProducerQueue<std::pair<int msg, torch::Tensor>>> queues;
-}
+  std::vector<ConsumerProducerQueue<std::pair<int, torch::Tensor>>> queues;
+};
 
 int main() {
   int batch_size = 1;
