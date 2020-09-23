@@ -1,10 +1,12 @@
 #include <cmath>
 #include <cstdint>
+
+#include <chrono>
 #include <thread>
-#include <torch/torch.h>
-#include <c10/cuda/CUDAGuard.h>
 
 #include "queue.h"
+#include <c10/cuda/CUDAGuard.h>
+#include <torch/torch.h>
 
 #define NEG_INF -1e10
 using torch::Tensor;
@@ -161,7 +163,7 @@ void local_pipeline_stage(std::shared_ptr<SingleDeviceGPT> model, PipelineDataQu
       // received the stop signal. pass it down to the pipeline and return.
       out_queue.add(packet);
       return;
-    } break;  // comfort some compilers
+    } break; // comfort some compilers
     default:
       // TODO: fail the program here
       std::cerr << "Unknown message type: " << packet.first << std::endl;
@@ -197,7 +199,7 @@ struct MultiDeviceGPT : torch::nn::Module {
     }
     std::vector<torch::Tensor> results;
     PacketType r;
-    queues.back().consume(r);  // skip the initial message
+    queues.back().consume(r); // skip the initial message
     for (int i = 0; i < n_slices; i++) {
       queues.back().consume(r);
       results.push_back(r.second);
@@ -207,14 +209,12 @@ struct MultiDeviceGPT : torch::nn::Module {
 
   void stop() {
     queues[0].add(std::make_pair(2, torch::Tensor()));
-    for (auto& w: workers) {
+    for (auto &w : workers) {
       w.join();
     }
   }
 
-  ~MultiDeviceGPT() {
-    stop();
-  }
+  ~MultiDeviceGPT() { stop(); }
 
   int n_devices_;
   std::vector<std::shared_ptr<SingleDeviceGPT>> segments;
@@ -240,11 +240,15 @@ int main() {
 
   MultiDeviceGPT gpt_m(1, n_layers, embedding_dim, embedding_dim / 64, embedding_dim * 4);
   for (int i = 0; i < 10; i++) {
+    auto start_time = std::chrono::high_resolution_clock::now();
     gpt_m.zero_grad();
     torch::Tensor t = gpt_m.forward(x, n_slices);
     auto fake_loss = t.mean();
     std::cout << fake_loss << std::endl;
     fake_loss.backward();
+    auto current_time = std::chrono::high_resolution_clock::now();
+    std::cout << "Duration = " << std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time).count()
+              << " seconds" << std::endl;
   }
   return 0;
 }
