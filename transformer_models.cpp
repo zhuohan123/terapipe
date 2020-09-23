@@ -124,7 +124,7 @@ struct SingleDeviceGPT : torch::nn::Module {
       attn_caches.resize(size);
     }
     for (int i = 0; i < size; i++) {
-      auto result = layers[i]->as<TransformerLayer>()->forward(x, std::move(new_attn_caches[i]));
+      auto result = layers[i]->as<TransformerLayer>()->forward(x, std::move(attn_caches[i]));
       x = std::get<0>(result);
       new_attn_caches.push_back(std::move(std::get<1>(result)));
     }
@@ -157,7 +157,11 @@ int main() {
 
   auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
   torch::Tensor x = torch::randn({seq_len, batch_size, embedding_dim}, options);
-  TransformerLayer tf(embedding_dim, 64, 3072 * 2, torch::Device("cuda:0"));
-  tf.forward(x, nullptr);
+
+  SingleDeviceGPT gpt_s(12, embedding_dim, 64, 3072 * 2, torch::Device("cuda:0"));
+  auto r = gpt_s.forward(x, {});
+  auto fake_loss =  std::get<0>(r).mean();
+  std::cout << fake_loss << std::endl;
+  fake_loss.backward();
   return 0;
 }
