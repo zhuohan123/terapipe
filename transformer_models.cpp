@@ -172,16 +172,16 @@ void local_pipeline_stage(std::shared_ptr<SingleDeviceGPT> model, PipelineDataQu
 
 struct MultiDeviceGPT : torch::nn::Module {
   MultiDeviceGPT(int n_devices, int n_layers, int embedding_dim, int num_attention_heads, int ffn_embedding_dim)
-      : n_devices_(n_devices), queues(n_devices + 1) {
+      : n_devices_(n_devices), queues(n_devices + 1), workers(n_devices) {
     for (int i = 0; i < n_devices; i++) {
       int segment_size = n_layers / n_devices + int(i < n_layers % n_devices);
       auto gpt_segment = register_module("segment_" + std::to_string(i),
                                          std::make_shared<SingleDeviceGPT>(segment_size, embedding_dim,
                                                                            num_attention_heads, ffn_embedding_dim,
                                                                            torch::Device("cuda:" + std::to_string(i))));
-      segments.push_back(std::move(gpt_segment));
       workers[i] = std::thread(local_pipeline_stage, gpt_segment, std::ref(queues[i]), std::ref(queues[i + 1]),
                                torch::Device("cuda:" + std::to_string(i)));
+      segments.push_back(std::move(gpt_segment));
     }
   }
 
@@ -196,8 +196,9 @@ struct MultiDeviceGPT : torch::nn::Module {
       pos += subseq_len;
     }
     std::vector<torch::Tensor> results;
+    PacketType r;
+    queues.back().consume(r);  // skip the initial message
     for (int i = 0; i < n_slices; i++) {
-      PacketType r;
       queues.back().consume(r);
       results.push_back(r.second);
     }
@@ -229,10 +230,19 @@ int main() {
   auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
   torch::Tensor x = torch::randn({seq_len, batch_size, embedding_dim}, options);
 
-  SingleDeviceGPT gpt_s(12, embedding_dim, 64, 3072 * 2, torch::Device("cuda:0"));
-  auto r = gpt_s.forward(x, {});
-  auto fake_loss = std::get<0>(r).mean();
-  std::cout << fake_loss << std::endl;
-  fake_loss.backward();
+  // SingleDeviceGPT gpt_s(12, embedding_dim, embedding_dim / 64, embedding_dim * 4, torch::Device("cuda:0"));
+  // auto r = gpt_s.forward(x, {});
+  // auto fake_loss = std::get<0>(r).mean();
+  // std::cout << fake_loss << std::endl;
+  // fake_loss.backward();
+
+  MultiDeviceGPT gpt_m(1, 12, embedding_dim, embedding_dim / 64, embedding_dim * 4);
+  for (int i = 0; i < 20; i++) {
+    gpt_m.zero_grad();
+    torch::Tensor t = gpt_m.forward(x, 16);
+    auto fake_loss = t.mean();
+    std::cout << fake_loss << std::endl;
+    fake_loss.backward();
+  }
   return 0;
 }
