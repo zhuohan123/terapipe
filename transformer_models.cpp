@@ -74,7 +74,7 @@ struct TransformerLayer : torch::nn::Module {
     attn_ln = register_module("attn_ln", torch::nn::LayerNorm(std::vector<int64_t>({embedding_dim})));
     attn = register_module("attn",
                            std::make_shared<MultiheadLMAttentionWithCache>(embedding_dim, num_attention_heads, device));
-    fc_ln = register_module("fc_ln", torch::nn::LayerNorm(std::vector<int64_t>(e{mbedding_dim})));
+    fc_ln = register_module("fc_ln", torch::nn::LayerNorm(std::vector<int64_t>({embedding_dim})));
     fc1 = register_module("fc1", torch::nn::Linear(embedding_dim, ffn_embedding_dim));
     fc2 = register_module("fc2", torch::nn::Linear(ffn_embedding_dim, embedding_dim));
 
