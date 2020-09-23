@@ -5,15 +5,15 @@ cluster_name: model_parallel
 
 # The maximum number of workers nodes to launch in addition to the head
 # node. This takes precedence over min_workers. min_workers defaults to 0.
-min_workers: 0
-initial_workers: 0
-max_workers: 0
+min_workers: 3
+initial_workers: 3
+max_workers: 3
 
 # Cloud-provider specific configuration.
 provider:
     type: aws
     region: us-west-2
-    availability_zone: us-west-2c
+    availability_zone: us-west-2a
     cache_stopped_nodes: False
 
 # How Ray will authenticate with newly launched nodes.
@@ -22,33 +22,31 @@ auth:
 
 head_node:
     InstanceType: p2.xlarge
-    ImageId: latest_dlami
-    # InstanceMarketOptions:
-    #     MarketType: spot
-    BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-              VolumeSize: 300
-
+    ImageId: ami-0f877ca59e81ed9b2 # pipe-ucx-3
+    SecurityGroupIds:
+        - "sg-f55048b4"
+    Placement:
+        GroupName: hoplite-group
 
 worker_nodes:
-    InstanceType: p3.8xlarge
-    ImageId: latest_dlami
-    # InstanceMarketOptions:
-    #     MarketType: spot
-    BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-              VolumeSize: 300
-        # SpotOptions:
-        #     MaxPrice: "9.0"
-    #     # Run workers on spot by default. Comment this out to use on-demand.
-    #     InstanceMarketOptions:
-    #         MarketType: spot
+    InstanceType: p2.xlarge
+    ImageId: ami-0f877ca59e81ed9b2 # pipe-ucx-3
+    SecurityGroupIds:
+        - "sg-f55048b4"
+    Placement:
+        GroupName: hoplite-group
 
 setup_commands:
-    # This replaces the standard anaconda Ray installation
-    - ray || pip install -U ray
-    - pip install torch==1.5.1+cu101 torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+    - sudo mount -t efs fs-6dad81c6:/ efs
+    - sudo chmod 777 efs
 
+# Command to start ray on the head node. You don't need to change this.
+head_start_ray_commands:
+    - ray stop
+    - "ulimit -n 65536; ray start --head --redis-port=6379 --object-manager-port=8076 --autoscaling-config=~/ray_bootstrap_config.yaml --resources='{\"machine\": 1}'"
+
+# Command to start ray on worker nodes. You don't need to change this.
+worker_start_ray_commands:
+    - ray stop
+    - "ulimit -n 65536; ray start --address=$RAY_HEAD_IP:6379 --object-manager-port=8076 --resources='{\"machine\": 1}'"
 
