@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <thread>
 #include <torch/torch.h>
+#include <c10/cuda/CUDAGuard.h>
 
 #include "queue.h"
 
@@ -140,7 +141,7 @@ struct SingleDeviceGPT : torch::nn::Module {
 void local_pipeline_stage(std::shared_ptr<SingleDeviceGPT> model, PipelineDataQueue &in_queue,
                           PipelineDataQueue &out_queue, torch::Device device) {
   std::vector<std::unique_ptr<AttentionCache>> caches;
-  torch::cuda::CUDAGuard g(device);
+  c10::cuda::CUDAGuard g(device);
   while (true) {
     PacketType packet;
     in_queue.consume(packet);
@@ -192,6 +193,7 @@ struct MultiDeviceGPT : torch::nn::Module {
       int subseq_len = seq_len / n_slices + int(i < seq_len % n_slices);
       torch::Tensor slice = x.index({torch::indexing::Slice(pos, pos + subseq_len)});
       queues[0].add(std::make_pair(1, slice));
+      pos += subseq_len;
     }
     std::vector<torch::Tensor> results;
     for (int i = 0; i < n_slices; i++) {
