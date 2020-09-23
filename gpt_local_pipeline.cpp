@@ -49,27 +49,28 @@ MultiDeviceGPT::MultiDeviceGPT(int n_devices, int n_layers, int embedding_dim, i
 }
 
 torch::Tensor MultiDeviceGPT::forward(torch::Tensor x, int n_slices) {
-  queues[0].add(std::make_pair(0, torch::Tensor()));
+  push_empty_cache_signal();
   int seq_len = x.size(0);
   int pos = 0;
   for (int i = 0; i < n_slices; i++) {
     int subseq_len = seq_len / n_slices + int(i < seq_len % n_slices);
     torch::Tensor slice = x.index({torch::indexing::Slice(pos, pos + subseq_len)});
-    queues[0].add(std::make_pair(1, slice));
+    push_input_batch(slice);
     pos += subseq_len;
   }
   std::vector<torch::Tensor> results;
-  PacketType r;
-  queues.back().consume(r); // skip the initial message
+  int msg;
+  torch::Tensor r;
+  pop(&msg, &r); // skip the initial message
   for (int i = 0; i < n_slices; i++) {
-    queues.back().consume(r);
-    results.push_back(r.second);
+    pop(&msg, &r);
+    results.push_back(r);
   }
   return torch::cat(results, 0);
 }
 
 void MultiDeviceGPT::stop() {
-  queues[0].add(std::make_pair(2, torch::Tensor()));
+  push_stop_signal();
   for (auto &w : workers) {
     w.join();
   }
