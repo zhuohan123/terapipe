@@ -154,7 +154,7 @@ void local_pipeline_stage(std::shared_ptr<SingleDeviceGPT> model, PipelineDataQu
       torch::Tensor x = packet.second.to(device, torch::kFloat32, /*non_blocking=*/true);
       auto output = model->forward(x, std::move(caches));
       caches = std::move(std::get<1>(output));
-      out_queue.add(std::get<0>(output));
+      out_queue.add(std::make_pair(1, std::get<0>(output)));
     } break;
     case 2: {
       // received the stop signal. pass it down to the pipeline and return.
