@@ -145,24 +145,25 @@ void local_pipeline_stage(std::shared_ptr<SingleDeviceGPT> model, PipelineDataQu
     PacketType packet;
     in_queue.consume(packet);
     switch (packet.first) {
-    case 0:
+    case 0: {
       // received the signal for new batch. pass it down to the pipeline and clear local caches.
       caches.clear();
       out_queue.add(packet);
-      break;
-    case 1:
+    } break;
+    case 1: {
       torch::Tensor x = packet.second.to(device, torch::kFloat32, /*non_blocking=*/true);
-      auto output = model.forward(x, caches);
+      auto output = model->forward(x, caches);
       caches = std::move(std::get<1>(output));
       out_queue.add(std::get<0>(output));
-      break;
-    case 2:
+    } break;
+    case 2: {
       // received the stop signal. pass it down to the pipeline and return.
       out_queue.add(packet);
       return;
+    } break;  // comfort some compilers
     default:
       // TODO: fail the program here
-      std::cerr << "Unknown message type: " << msg << std::endl;
+      std::cerr << "Unknown message type: " << packet.first << std::endl;
       break;
     }
   }
@@ -189,7 +190,7 @@ struct MultiDeviceGPT : torch::nn::Module {
     int pos = 0;
     for (int i = 0; i < n_slices; i++) {
       int subseq_len = seq_len / n_slices + int(i < seq_len % n_slices);
-      slice = x.index({torch::indexing::Slice(pos, pos + subseq_len)});
+      torch::Tensor slice = x.index({torch::indexing::Slice(pos, pos + subseq_len)});
       queues[0].add(std::make_pair(1, slice));
     }
     std::vector<torch::Tensor> results;
@@ -203,7 +204,7 @@ struct MultiDeviceGPT : torch::nn::Module {
 
   void stop() {
     queues[0].add(std::make_pair(2, torch::Tensor()));
-    for (const auto& w: workers) {
+    for (auto& w: workers) {
       w.join();
     }
   }
