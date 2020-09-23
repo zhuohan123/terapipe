@@ -1,5 +1,7 @@
 #include "gpt_local_pipeline.h"
 
+#include <c10/cuda/CUDAGuard.h>
+
 void local_pipeline_stage(std::shared_ptr<SingleDeviceGPT> model, PipelineDataQueue &in_queue,
                           PipelineDataQueue &out_queue, torch::Device device) {
   std::vector<std::unique_ptr<AttentionCache>> caches;

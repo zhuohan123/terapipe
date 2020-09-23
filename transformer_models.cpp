@@ -2,8 +2,6 @@
 
 #include <cmath>
 
-#include <c10/cuda/CUDAGuard.h>
-
 MultiheadLMAttentionWithCache::MultiheadLMAttentionWithCache(int embed_dim, int num_heads, const torch::Device &device)
     : embed_dim_(embed_dim), num_heads_(num_heads) {
   in_proj = register_module("in_proj", torch::nn::Linear(embed_dim, embed_dim * 3));
