@@ -17,6 +17,7 @@ class Communicator:
 
     async def get_prev_ep(self):
         if self.prev_address is not None:
+            await asyncio.sleep(2.0)
             print("has previous node")
             prev_ep = await ucp.create_endpoint(self.prev_address, self.prev_port)
         else:

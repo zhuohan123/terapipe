@@ -9,7 +9,7 @@ import argparse
 n_bytes = 100
 seq_len = 10
 q_in = queue.Queue()
-q_out = asyncio.Queue()
+q_out = None
 loop = None
 
 
@@ -34,7 +34,7 @@ async def receive_data_and_put_to_q_in(prev_ep):
     for _ in range(seq_len):
         msg = np.zeros(n_bytes, dtype='u1')  # create some data to send
         msg_size = np.array([msg.nbytes], dtype=np.uint64)
-        await prev_ep.recv(msg, msg_size)
+        await prev_ep.recv(msg, n_bytes)
         q_in.put(msg)
 
 
@@ -70,10 +70,11 @@ if __name__ == "__main__":
     parser.add_argument('--prev-address', metavar='IP', type=str, default=None)
     parser.add_argument('--prev-port', metavar='PORT', type=int, default=None)
     args = parser.parse_args()
-    t = threading.Thread(target=calc)
-    t.start()
     comm = Communicator(ucx_main, args.my_address, args.my_port,
                         args.prev_address, args.prev_port)
     loop = comm.loop
+    q_out = asyncio.Queue(loop=loop)
+    t = threading.Thread(target=calc)
+    t.start()
     comm.run()
     t.join()
