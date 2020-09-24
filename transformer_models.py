@@ -43,6 +43,26 @@ class TransformerConfig:
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim)
         return transformer_layers, x
 
+    def create_layers_gpu(self, device='cuda:0'):
+        transformer_layers = [
+            TransformerLayer(
+                self.embedding_dim,
+                self.ffn_embedding_dim,
+                self.num_attention_heads,
+                device=device
+            )
+            for _ in range(self.n_layers)
+        ]
+        return transformer_layers
+
+    def create_inputs(self, device):
+        x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim, device=device)
+        return x
+
+    def create_inputs_empty(self, device):
+        x = torch.empty((self.seq_len, self.batch_size, self.embedding_dim), device=device)
+        return x
+
     def create_layers_and_inputs_on_gpu(self):
         assert self.n_layers % self.n_devices == 0
         print("Use placement orders: ", self.placement_orders)

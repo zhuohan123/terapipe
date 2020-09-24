@@ -5,12 +5,37 @@ import threading
 import queue
 import asyncio
 import argparse
+import torch
+from transformer_models import (
+    TransformerConfig, TransformerLayer,
+    SingleDeviceTransformer, PipelinedTransformer,
+    ModelParallelTransformerLayer
+)
 
-n_bytes = 100
-seq_len = 10
+
+n_slices = 8
 q_in = queue.Queue()
 q_out = None
 loop = None
+config = TransformerConfig(
+    batch_size=1,
+    seq_len=1024,
+    n_layers=72,
+    embedding_dim=2048,
+    placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
+)
+
+
+def uniform_slice_x(x, n_slices):
+    seq_len = x.size()[0]
+    sliced_x = []
+    start_index = 0
+    for i in range(n_slices):
+        seq_len_slice = seq_len // n_slices + int(i < seq_len % n_slices)
+        sliced_x.append(x[start_index:start_index + seq_len_slice])
+        start_index += seq_len_slice
+    assert start_index == seq_len
+    return sliced_x
 
 
 async def put_stuff_to_q_out(x):
@@ -18,36 +43,38 @@ async def put_stuff_to_q_out(x):
 
 
 def calc():
-    for _ in range(seq_len):
-        t = q_in.get()
-        t = t + 1
-        asyncio.run_coroutine_threadsafe(put_stuff_to_q_out(t), loop=loop)
+    for _ in range(n_slices):
+        x = q_in.get()
+        y = x + 1
+        asyncio.run_coroutine_threadsafe(put_stuff_to_q_out(y), loop=loop)
 
 
 async def generate_data_and_put_to_q_in():
-    for _ in range(seq_len):
-        msg = np.zeros(n_bytes, dtype='u1')  # create some data to send
-        q_in.put(msg)
+    x = config.create_inputs()
+    sliced_x = uniform_slice_x(x, n_slices)
+    for s in sliced_x:
+        print("s:", s)
+        q_in.put(s)
 
 
 async def receive_data_and_put_to_q_in(prev_ep):
-    for _ in range(seq_len):
-        msg = np.zeros(n_bytes, dtype='u1')  # create some data to send
-        msg_size = np.array([msg.nbytes], dtype=np.uint64)
-        await prev_ep.recv(msg, n_bytes)
-        q_in.put(msg)
+    x = config.create_inputs_empty()
+    sliced_x = uniform_slice_x(x, n_slices)
+    for s in sliced_x:
+        await prev_ep.recv(s)
+        q_in.put(s)
 
 
 async def get_outputs_and_send_them_out(next_ep):
-    for _ in range(seq_len):
-        msg_new = await q_out.get()
-        await next_ep.send(msg_new, n_bytes)
+    for _ in range(n_slices):
+        y = await q_out.get()
+        await next_ep.send(y)
 
 
 async def get_outputs_and_print_the_results():
-    for i in range(seq_len):
-        msg_new = await q_out.get()
-        print("i:", i, "msg:", msg_new)
+    for i in range(n_slices):
+        y = await y.get()
+        print("i:", i, "y:", y)
 
 
 async def ucx_main(prev_ep, next_ep):
@@ -74,7 +101,7 @@ if __name__ == "__main__":
                         args.prev_address, args.prev_port)
     loop = comm.loop
     q_out = asyncio.Queue(loop=loop)
-    t = threading.Thread(target=calc)
+    t = threading.Thread(target=calc, args=config)
     t.start()
     comm.run()
     t.join()
