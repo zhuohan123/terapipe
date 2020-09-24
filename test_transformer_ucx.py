@@ -73,7 +73,7 @@ async def get_outputs_and_send_them_out(next_ep):
 
 async def get_outputs_and_print_the_results():
     for i in range(n_slices):
-        y = await y.get()
+        y = await q_out.get()
         print("i:", i, "y:", y)
 
 
