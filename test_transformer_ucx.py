@@ -70,7 +70,6 @@ if __name__ == "__main__":
     parser.add_argument('--prev-address', metavar='IP', type=str, default=None)
     parser.add_argument('--prev-port', metavar='PORT', type=int, default=None)
     args = parser.parse_args()
-    global loop
     t = threading.Thread(target=calc)
     t.start()
     comm = Communicator(ucx_main, args.my_address, args.my_port,
