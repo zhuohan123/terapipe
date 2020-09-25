@@ -43,51 +43,56 @@ async def put_stuff_to_q_out(x):
 
 
 def calc():
-    for _ in range(n_slices):
+    # forward
+    for i in range(n_slices):
+        x = q_in.get()
+        y = x + 1
+        asyncio.run_coroutine_threadsafe(put_stuff_to_q_out(y), loop=loop)
+
+    # backward
+    for i in reversed(range(n_slices)):
         x = q_in.get()
         y = x + 1
         asyncio.run_coroutine_threadsafe(put_stuff_to_q_out(y), loop=loop)
 
 
-async def generate_data_and_put_to_q_in():
-    x = config.create_inputs()
+async def prev_coroutine(prev_ep=None):
+    x = config.create_inputs() if prev_ep is None else config.create_inputs_empty()
     sliced_x = uniform_slice_x(x, n_slices)
     for s in sliced_x:
-        print("s:", s)
+        if prev_ep is not None:
+            await prev_ep.recv(s)
         q_in.put(s)
-
-
-async def receive_data_and_put_to_q_in(prev_ep):
-    x = config.create_inputs_empty()
-    sliced_x = uniform_slice_x(x, n_slices)
-    for s in sliced_x:
-        await prev_ep.recv(s)
-        q_in.put(s)
-
-
-async def get_outputs_and_send_them_out(next_ep):
-    for _ in range(n_slices):
+    for i in reversed(range(n_slices)):
         y = await q_out.get()
-        await next_ep.send(y)
+        if prev_ep is not None:
+            await prev_ep.send(y)
+        else:
+            print("back i:", i, "y:", y)
 
 
-async def get_outputs_and_print_the_results():
+async def succ_coroutine(next_ep=None):
     for i in range(n_slices):
         y = await q_out.get()
-        print("i:", i, "y:", y)
+        if next_ep is None:
+            print("forward i:", i, "y:", y)
+        else:
+            await next_ep.send(y)
+
+    grad_x = config.create_inputs_empty()
+    sliced_grad_x = uniform_slice_x(grad_x, n_slices)
+
+    for s in reversed(sliced_grad_x):
+        if next_ep is not None:
+            await next_ep.recv(s)
+        q_in.put(s)
 
 
 async def ucx_main(prev_ep, next_ep):
-    if prev_ep:
-        prev_aw = receive_data_and_put_to_q_in(prev_ep)
-    else:
-        prev_aw = generate_data_and_put_to_q_in()
-
-    if next_ep:
-        next_aw = get_outputs_and_send_them_out(next_ep)
-    else:
-        next_aw = get_outputs_and_print_the_results()
-    await asyncio.wait([prev_aw, next_aw])
+    await asyncio.wait([
+        prev_coroutine(prev_ep),
+        succ_coroutine(next_ep)
+    ])
 
 
 if __name__ == "__main__":
@@ -101,7 +106,7 @@ if __name__ == "__main__":
                         args.prev_address, args.prev_port)
     loop = comm.loop
     q_out = asyncio.Queue(loop=loop)
-    t = threading.Thread(target=calc, args=config)
+    t = threading.Thread(target=calc)
     t.start()
     comm.run()
     t.join()

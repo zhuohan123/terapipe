@@ -13,7 +13,7 @@ max_workers: 3
 provider:
     type: aws
     region: us-west-2
-    availability_zone: us-west-2a
+    availability_zone: us-west-2c
     cache_stopped_nodes: False
 
 # How Ray will authenticate with newly launched nodes.
@@ -21,20 +21,20 @@ auth:
     ssh_user: ubuntu
 
 head_node:
-    InstanceType: p2.xlarge
-    ImageId: ami-0f877ca59e81ed9b2 # pipe-ucx-3
+    InstanceType: p3.2xlarge
+    ImageId: ami-068e58166d03a25d9 # pipe-ucx-4
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
-        GroupName: hoplite-group
+        GroupName: pipe-group
 
 worker_nodes:
-    InstanceType: p2.xlarge
-    ImageId: ami-0f877ca59e81ed9b2 # pipe-ucx-3
+    InstanceType: p3.2xlarge
+    ImageId: ami-068e58166d03a25d9 # pipe-ucx-4
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
-        GroupName: hoplite-group
+        GroupName: pipe-group
 
 setup_commands:
     - sudo mount -t efs fs-6dad81c6:/ efs

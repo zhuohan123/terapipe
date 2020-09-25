@@ -43,7 +43,7 @@ class TransformerConfig:
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim)
         return transformer_layers, x
 
-    def create_layers_gpu(self, device='cuda:0'):
+    def create_layers_gpu(self, device='cuda'):
         transformer_layers = [
             TransformerLayer(
                 self.embedding_dim,
@@ -55,11 +55,11 @@ class TransformerConfig:
         ]
         return transformer_layers
 
-    def create_inputs(self, device):
+    def create_inputs(self, device='cuda'):
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim, device=device)
         return x
 
-    def create_inputs_empty(self, device):
+    def create_inputs_empty(self, device='cuda'):
         x = torch.empty((self.seq_len, self.batch_size, self.embedding_dim), device=device)
         return x
 
