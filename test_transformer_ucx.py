@@ -56,42 +56,42 @@ def calc():
         asyncio.run_coroutine_threadsafe(put_stuff_to_q_out(y), loop=loop)
 
 
-async def prev_coroutine(prev_ep=None):
+async def recv_coroutine(prev_ep=None, next_ep=None):
     x = config.create_inputs() if prev_ep is None else config.create_inputs_empty()
     sliced_x = uniform_slice_x(x, n_slices)
     for s in sliced_x:
         if prev_ep is not None:
             await prev_ep.recv(s)
         q_in.put(s)
-    for i in reversed(range(n_slices)):
-        y = await q_out.get()
-        if prev_ep is not None:
-            await prev_ep.send(y)
-        else:
-            print("back i:", i, "y:", y)
-
-
-async def succ_coroutine(next_ep=None):
-    for i in range(n_slices):
-        y = await q_out.get()
-        if next_ep is None:
-            print("forward i:", i, "y:", y)
-        else:
-            await next_ep.send(y)
 
     grad_x = config.create_inputs_empty()
     sliced_grad_x = uniform_slice_x(grad_x, n_slices)
-
     for s in reversed(sliced_grad_x):
         if next_ep is not None:
             await next_ep.recv(s)
         q_in.put(s)
 
 
+async def send_coroutine(prev_ep=None, next_ep=None):
+    for i in range(n_slices):
+        y = await q_out.get()
+        if next_ep is None:
+            print("forward i:", i, "y:", y, flush=True)
+        else:
+            await next_ep.send(y)
+
+    for i in reversed(range(n_slices)):
+        y = await q_out.get()
+        if prev_ep is not None:
+            await prev_ep.send(y)
+        else:
+            print("back i:", i, "y:", y, flush=True)
+
+
 async def ucx_main(prev_ep, next_ep):
     await asyncio.wait([
-        prev_coroutine(prev_ep),
-        succ_coroutine(next_ep)
+        recv_coroutine(prev_ep, next_ep),
+        send_coroutine(prev_ep, next_ep)
     ])
 
 
