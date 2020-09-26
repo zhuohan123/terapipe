@@ -22,12 +22,16 @@ for i in $(seq 0 $((N_NODES - 1))); do
        ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
         --my-address ${NODE_ADDR} \
         --my-port 7777 \
+        --rank ${i} \
+        --world-size ${N_NODES} \
     &
   elif [ ${i} == $((N_NODES - 1)) ]; then
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
       ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
         --prev-address ${PREV_ADDR} \
         --prev-port 7777 \
+        --rank ${i} \
+        --world-size ${N_NODES} \
     &
   else
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
@@ -36,6 +40,8 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --my-port 7777 \
         --prev-address ${PREV_ADDR} \
         --prev-port 7777 \
+        --rank ${i} \
+        --world-size ${N_NODES} \
     &
   fi
   PREV_ADDR=${NODE_ADDR}

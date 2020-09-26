@@ -51,7 +51,7 @@ class TransformerConfig:
                 self.num_attention_heads,
                 device=device
             )
-            for _ in range(self.n_layers)
+            for _ in range(self.n_layers // self.n_devices)
         ]
         return transformer_layers
 

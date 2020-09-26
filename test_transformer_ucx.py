@@ -26,17 +26,22 @@ def uniform_slice_x(x, n_slices):
 
 
 class UCXTransformerRunner:
-    def __init__(self, config, n_slices, my_address, my_port, prev_address, prev_port):
+    def __init__(self, config, n_slices, my_address, my_port, prev_address,
+                 prev_port, rank, world_size):
         self.config = config
         self.n_slices = n_slices
         self.my_address = my_address
         self.my_port = my_port
         self.prev_address = prev_address
         self.prev_port = prev_port
-        self.comm = Communicator(self.ucx_main, my_address, my_port, prev_address, prev_port)
+        self.comm = Communicator(self.ucx_main, my_address, my_port,
+                                 prev_address, prev_port)
         self.loop = self.comm.loop
         self.q_in = queue.Queue()
         self.q_out = asyncio.Queue(loop=self.loop)
+        self.rank = rank
+        self.world_size = world_size
+        self.layers = self.config.create_layers_gpu()
 
     async def ucx_main(self, prev_ep, next_ep):
         await asyncio.wait([
@@ -45,7 +50,8 @@ class UCXTransformerRunner:
         ])
 
     async def recv_coroutine(self, prev_ep=None, next_ep=None):
-        x = self.config.create_inputs() if prev_ep is None else self.config.create_inputs_empty()
+        x = (self.config.create_inputs_empty()
+             if prev_ep is not None else self.config.create_inputs())
         sliced_x = uniform_slice_x(x, self.n_slices)
         for s in sliced_x:
             if prev_ep is not None:
@@ -79,10 +85,15 @@ class UCXTransformerRunner:
 
     def calc(self):
         # forward
+        attn_caches = [None] * len(self.layers)
         for i in range(self.n_slices):
             x = self.q_in.get()
-            y = x + 1
-            asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(y), loop=self.loop)
+            new_attn_caches = []
+            for layer, attn_cache in zip(self.layers, attn_caches):
+                x, new_attn_cache = layer(x, attn_cache)
+                new_attn_caches.append(new_attn_cache)
+            attn_caches = new_attn_caches
+            asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
 
         # backward
         for i in reversed(range(self.n_slices)):
@@ -103,6 +114,8 @@ def main():
     parser.add_argument('--my-port', metavar='PORT', type=int, default=None)
     parser.add_argument('--prev-address', metavar='IP', type=str, default=None)
     parser.add_argument('--prev-port', metavar='PORT', type=int, default=None)
+    parser.add_argument('--rank', metavar='I', type=int, default=0)
+    parser.add_argument('--world-size', metavar='N', type=int, default=1)
     args = parser.parse_args()
 
     config = TransformerConfig(
@@ -110,10 +123,13 @@ def main():
         seq_len=1024,
         n_layers=72,
         embedding_dim=2048,
+        n_devices=args.world_size,
     )
     n_slices = 8
 
-    runner = UCXTransformerRunner(config, n_slices, args.my_address, args.my_port, args.prev_address, args.prev_port)
+    runner = UCXTransformerRunner(
+        config, n_slices, args.my_address, args.my_port, args.prev_address,
+        args.prev_port, args.rank, args.world_size)
     runner.run()
 
 
