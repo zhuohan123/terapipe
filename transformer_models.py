@@ -28,7 +28,6 @@ class TransformerConfig:
         self.ffn_embedding_dim = ffn_embedding_dim if ffn_embedding_dim else embedding_dim * 4
         self.num_attention_heads = num_attention_heads if num_attention_heads else embedding_dim // 64
         self.n_devices = torch.cuda.device_count() if n_devices is None else n_devices
-        assert self.n_devices <= torch.cuda.device_count()
         self.placement_orders = placement_orders or list(range(self.n_devices))
 
     def create_layers_and_inputs(self):

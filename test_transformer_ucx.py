@@ -44,10 +44,10 @@ class UCXTransformerRunner:
         self.layers = self.config.create_layers_gpu()
 
     async def ucx_main(self, prev_ep, next_ep):
-        await asyncio.wait([
+        await asyncio.gather(
             self.recv_coroutine(prev_ep, next_ep),
             self.send_coroutine(prev_ep, next_ep)
-        ])
+        )
 
     async def recv_coroutine(self, prev_ep=None, next_ep=None):
         x = (self.config.create_inputs_empty()
@@ -71,7 +71,7 @@ class UCXTransformerRunner:
             if next_ep is None:
                 print("forward i:", i, "y:", y, flush=True)
             else:
-                await next_ep.send(y)
+                await next_ep.send(y.detach())
 
         for i in reversed(range(self.n_slices)):
             y = await self.q_out.get()
@@ -120,9 +120,9 @@ def main():
 
     config = TransformerConfig(
         batch_size=1,
-        seq_len=1024,
-        n_layers=72,
-        embedding_dim=2048,
+        seq_len=64,
+        n_layers=24,
+        embedding_dim=128,
         n_devices=args.world_size,
     )
     n_slices = 8
