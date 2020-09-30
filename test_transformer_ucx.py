@@ -86,20 +86,43 @@ class UCXTransformerRunner:
     def calc(self):
         # forward
         attn_caches = [None] * len(self.layers)
+        all_attn_hiddens = []
+        all_inputs = []
+        all_outputs = []
         for i in range(self.n_slices):
             x = self.q_in.get()
+            all_inputs.append(x)
             new_attn_caches = []
+            attn_hiddens = [[]]
             for layer, attn_cache in zip(self.layers, attn_caches):
                 x, new_attn_cache = layer(x, attn_cache)
                 new_attn_caches.append(new_attn_cache)
+                attn_hiddens += [v for k, v in new_attn_cache.items()]
             attn_caches = new_attn_caches
+            all_attn_hiddens.append(attn_hiddens)
+            all_outputs.append(x)
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
 
         # backward
+        da = None
+        a = None
         for i in reversed(range(self.n_slices)):
-            x = self.q_in.get()
-            y = x + 1
-            asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(y), loop=self.loop)
+            dy = self.q_in.get()
+            y = all_outputs[i]
+            x = all_inputs[i]
+            outputs = [y]
+            grad_outputs = [dy]
+            inputs = [x]
+            if da is not None:
+                outputs += a
+                grad_outputs += da
+            inputs += all_attn_hiddens[i]
+            # TODO: also calculate the grad to the weights
+            all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
+            dx = all_grads[0]
+            da = all_grads[1:]
+            a = all_attn_hiddens[i]
+            asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
 
     def run(self):
         t = threading.Thread(target=self.calc)
