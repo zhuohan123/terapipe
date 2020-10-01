@@ -93,7 +93,7 @@ class UCXTransformerRunner:
     def step(self):
         # forward
         attn_caches = [None] * len(self.layers)
-        all_attn_hiddens = []
+        all_attn_hiddens = [[]]
         all_inputs = []
         all_outputs = []
         for i in range(self.n_slices):
