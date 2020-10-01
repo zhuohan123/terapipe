@@ -28,7 +28,7 @@ def uniform_slice_x(x, n_slices):
 
 class UCXTransformerRunner:
     def __init__(self, config, n_slices, my_address, my_port, prev_address,
-                 prev_port, rank, world_size):
+                 prev_port, rank, world_size, n_steps=10):
         self.config = config
         self.n_slices = n_slices
         self.my_address = my_address
@@ -48,6 +48,7 @@ class UCXTransformerRunner:
             self.all_paramters += list(layer.parameters())
         self.n_params = len(self.all_paramters)
         self.optimizer = torch.optim.SGD(self.all_paramters, lr=0.01)
+        self.n_steps = n_steps
 
     async def ucx_main(self, prev_ep, next_ep):
         await asyncio.gather(
@@ -56,32 +57,34 @@ class UCXTransformerRunner:
         )
 
     async def recv_coroutine(self, prev_ep=None, next_ep=None):
-        x = (self.config.create_inputs_empty()
-             if prev_ep is not None else self.config.create_inputs())
-        sliced_x = uniform_slice_x(x, self.n_slices)
-        for s in sliced_x:
-            if prev_ep is not None:
-                await prev_ep.recv(s)
-            self.q_in.put(s)
+        for _ in range(self.n_steps):
+            x = (self.config.create_inputs_empty()
+                 if prev_ep is not None else self.config.create_inputs())
+            sliced_x = uniform_slice_x(x, self.n_slices)
+            for s in sliced_x:
+                if prev_ep is not None:
+                    await prev_ep.recv(s)
+                self.q_in.put(s)
 
-        grad_x = (self.config.create_inputs_empty()
-                  if next_ep is not None else self.config.create_inputs())
-        sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
-        for s in reversed(sliced_grad_x):
-            if next_ep is not None:
-                await next_ep.recv(s)
-            self.q_in.put(s)
+            grad_x = (self.config.create_inputs_empty()
+                      if next_ep is not None else self.config.create_inputs())
+            sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
+            for s in reversed(sliced_grad_x):
+                if next_ep is not None:
+                    await next_ep.recv(s)
+                self.q_in.put(s)
 
     async def send_coroutine(self, prev_ep=None, next_ep=None):
-        for _ in range(self.n_slices):
-            y = await self.q_out.get()
-            if next_ep is not None:
-                await next_ep.send(y.detach())
+        for _ in range(self.n_steps):
+            for _ in range(self.n_slices):
+                y = await self.q_out.get()
+                if next_ep is not None:
+                    await next_ep.send(y.detach())
 
-        for _ in reversed(range(self.n_slices)):
-            dx = await self.q_out.get()
-            if prev_ep is not None:
-                await prev_ep.send(dx.detach())
+            for _ in reversed(range(self.n_slices)):
+                dx = await self.q_out.get()
+                if prev_ep is not None:
+                    await prev_ep.send(dx.detach())
 
     async def put_stuff_to_q_out(self, x):
         await self.q_out.put(x)
@@ -133,10 +136,11 @@ class UCXTransformerRunner:
         self.optimizer.step()
 
     def calc(self):
-        start_time = time.time()
-        self.step()
-        step_time = time.time() - start_time
-        print("step_time:", step_time)
+        for _ in self.n_steps:
+            start_time = time.time()
+            self.step()
+            step_time = time.time() - start_time
+            print("step_time:", step_time)
 
     def run(self):
         t = threading.Thread(target=self.calc)
