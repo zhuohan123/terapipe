@@ -94,6 +94,7 @@ class UCXTransformerRunner:
         # forward
         attn_caches = [None] * len(self.layers)
         all_attn_hiddens = [[]]
+        all_attn_hiddens_detached = [[]]
         all_inputs = []
         all_outputs = []
         start_time = time.time()
@@ -101,14 +102,18 @@ class UCXTransformerRunner:
             x = self.q_in.get()
             x.requires_grad = True
             all_inputs.append(x)
-            new_attn_caches = []
+            new_attn_caches_detached = []
             attn_hiddens = []
+            attn_hiddens_detached = []
             for layer, attn_cache in zip(self.layers, attn_caches):
                 x, new_attn_cache = layer(x, attn_cache)
-                new_attn_caches.append(new_attn_cache)
                 attn_hiddens += [v for k, v in new_attn_cache.items()]
-            attn_caches = new_attn_caches
+                new_attn_cache_detached = {k: v.detach() for k, v in new_attn_cache.items()}
+                attn_hiddens_detached += [v for k, v in new_attn_cache_detached.items()]
+                new_attn_caches_detached.append(new_attn_cache_detached)
+            attn_caches = new_attn_caches_detached
             all_attn_hiddens.append(attn_hiddens)
+            all_attn_hiddens_detached.append(attn_hiddens_detached)
             all_outputs.append(x)
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
         print("rank", self.rank, "forward_time", time.time() - start_time)
@@ -124,7 +129,7 @@ class UCXTransformerRunner:
             x = all_inputs[i]
             outputs = [y] + a
             grad_outputs = [dy] + da
-            inputs = self.all_paramters + [x] + all_attn_hiddens[i]
+            inputs = self.all_paramters + [x] + all_attn_hiddens_detached[i]
             # TODO: also calculate the grad to the weights, check why retain_graph is necessary.
             all_grads = torch.autograd.grad(outputs, inputs, grad_outputs, retain_graph=True)
             dw = all_grads[:self.n_params]
