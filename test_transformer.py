@@ -203,16 +203,18 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     return duration / n_testing_steps
 
 
-def megatron_main(distributed_rank, distributed_init_method, distributed_world_size,
-                  config: TransformerConfig, n_testing_steps=10, profile=False):
+def megatron_main(local_rank, distributed_init_method, distributed_world_size,
+                  distributed_world_rank, config: TransformerConfig, n_testing_steps=10, profile=False):
+    if distributed_world_rank is None:
+        distributed_world_rank = local_rank
     dist.init_process_group(
         backend='nccl',
         init_method=distributed_init_method,
         world_size=distributed_world_size,
-        rank=distributed_rank,
+        rank=distributed_world_rank,
     )
-    torch.cuda.set_device(distributed_rank)
-    suppress_output(distributed_rank)
+    torch.cuda.set_device(local_rank)
+    suppress_output(distributed_world_rank)
     # perform a dummy all-reduce to initialize the NCCL communicator
     dist.all_reduce(torch.zeros(1).cuda())
     mpu.initialize_model_parallel(distributed_world_size)
@@ -259,7 +261,7 @@ def megatron_spawn_tasks(config):
     distributed_world_size = torch.cuda.device_count()
     torch.multiprocessing.spawn(
         megatron_main,
-        args=(distributed_init_method, distributed_world_size, config),
+        args=(distributed_init_method, distributed_world_size, None, config),
         nprocs=distributed_world_size
     )
 
