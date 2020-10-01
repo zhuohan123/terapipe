@@ -48,7 +48,7 @@ class UCXTransformerRunner:
         for layer in self.layers:
             self.all_paramters += list(layer.parameters())
         self.n_params = len(self.all_paramters)
-        self.optimizer = torch.optim.SGD(self.all_paramters, lr=0.01)
+        self.optimizer = torch.optim.SGD(self.all_paramters, lr=1e-10)
         self.n_steps = n_steps
 
     async def ucx_main(self, prev_ep, next_ep):
@@ -96,6 +96,7 @@ class UCXTransformerRunner:
         all_attn_hiddens = [[]]
         all_inputs = []
         all_outputs = []
+        start_time = time.time()
         for i in range(self.n_slices):
             x = self.q_in.get()
             x.requires_grad = True
@@ -110,8 +111,10 @@ class UCXTransformerRunner:
             all_attn_hiddens.append(attn_hiddens)
             all_outputs.append(x)
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
+        print("rank", self.rank, "forward_time", time.time() - start_time)
 
         # backward
+        start_time = time.time()
         self.optimizer.zero_grad()
         a = []
         da = []
@@ -135,6 +138,7 @@ class UCXTransformerRunner:
                 else:
                     w.grad += grad_w
         self.optimizer.step()
+        print("rank", self.rank, "backward_time", time.time() - start_time)
 
     def calc(self):
         for _ in range(self.n_steps):
@@ -167,9 +171,9 @@ def main():
 
     config = TransformerConfig(
         batch_size=1,
-        seq_len=64,
-        n_layers=24,
-        embedding_dim=128,
+        seq_len=1024,
+        n_layers=48,
+        embedding_dim=2048,
         n_devices=args.world_size,
     )
     n_slices = 8
