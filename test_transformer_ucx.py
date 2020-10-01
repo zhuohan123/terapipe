@@ -58,7 +58,8 @@ class UCXTransformerRunner:
                 await prev_ep.recv(s)
             self.q_in.put(s)
 
-        grad_x = self.config.create_inputs_empty()
+        grad_x = (self.config.create_inputs_empty()
+                  if next_ep is not None else self.config.create_inputs())
         sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
         for s in reversed(sliced_grad_x):
             if next_ep is not None:
@@ -74,11 +75,11 @@ class UCXTransformerRunner:
                 await next_ep.send(y.detach())
 
         for i in reversed(range(self.n_slices)):
-            y = await self.q_out.get()
+            dx = await self.q_out.get()
             if prev_ep is not None:
-                await prev_ep.send(y)
+                await prev_ep.send(dx.detach())
             else:
-                print("back i:", i, "y:", y, flush=True)
+                print("back i:", i, "dx:", dx, flush=True)
 
     async def put_stuff_to_q_out(self, x):
         await self.q_out.put(x)
@@ -91,9 +92,10 @@ class UCXTransformerRunner:
         all_outputs = []
         for i in range(self.n_slices):
             x = self.q_in.get()
+            x.requires_grad = True
             all_inputs.append(x)
             new_attn_caches = []
-            attn_hiddens = [[]]
+            attn_hiddens = []
             for layer, attn_cache in zip(self.layers, attn_caches):
                 x, new_attn_cache = layer(x, attn_cache)
                 new_attn_caches.append(new_attn_cache)
@@ -104,23 +106,19 @@ class UCXTransformerRunner:
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
 
         # backward
-        da = None
-        a = None
+        a = []
+        da = []
         for i in reversed(range(self.n_slices)):
             dy = self.q_in.get()
             y = all_outputs[i]
             x = all_inputs[i]
-            outputs = [y]
-            grad_outputs = [dy]
-            inputs = [x]
-            if da is not None:
-                outputs += a
-                grad_outputs += da
-            inputs += all_attn_hiddens[i]
-            # TODO: also calculate the grad to the weights
-            all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
+            outputs = [y] + a
+            grad_outputs = [dy] + da
+            inputs = [x] + all_attn_hiddens[i]
+            # TODO: also calculate the grad to the weights, check why retain_graph is necessary.
+            all_grads = torch.autograd.grad(outputs, inputs, grad_outputs, retain_graph=True)
             dx = all_grads[0]
-            da = all_grads[1:]
+            da = list(all_grads[1:])
             a = all_attn_hiddens[i]
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
 
