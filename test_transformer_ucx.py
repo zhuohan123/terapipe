@@ -5,6 +5,7 @@ import threading
 import queue
 import asyncio
 import argparse
+import time
 import torch
 from transformer_models import (
     TransformerConfig, TransformerLayer,
@@ -42,6 +43,11 @@ class UCXTransformerRunner:
         self.rank = rank
         self.world_size = world_size
         self.layers = self.config.create_layers_gpu()
+        self.all_paramters = []
+        for layer in self.layers:
+            self.all_paramters += list(layer.parameters())
+        self.n_params = len(self.all_paramters)
+        self.optimizer = torch.optim.SGD(self.all_paramters, lr=0.01)
 
     async def ucx_main(self, prev_ep, next_ep):
         await asyncio.gather(
@@ -67,24 +73,20 @@ class UCXTransformerRunner:
             self.q_in.put(s)
 
     async def send_coroutine(self, prev_ep=None, next_ep=None):
-        for i in range(self.n_slices):
+        for _ in range(self.n_slices):
             y = await self.q_out.get()
-            if next_ep is None:
-                print("forward i:", i, "y:", y, flush=True)
-            else:
+            if next_ep is not None:
                 await next_ep.send(y.detach())
 
-        for i in reversed(range(self.n_slices)):
+        for _ in reversed(range(self.n_slices)):
             dx = await self.q_out.get()
             if prev_ep is not None:
                 await prev_ep.send(dx.detach())
-            else:
-                print("back i:", i, "dx:", dx, flush=True)
 
     async def put_stuff_to_q_out(self, x):
         await self.q_out.put(x)
 
-    def calc(self):
+    def step(self):
         # forward
         attn_caches = [None] * len(self.layers)
         all_attn_hiddens = []
@@ -106,6 +108,7 @@ class UCXTransformerRunner:
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
 
         # backward
+        self.optimizer.zero_grad()
         a = []
         da = []
         for i in reversed(range(self.n_slices)):
@@ -114,13 +117,26 @@ class UCXTransformerRunner:
             x = all_inputs[i]
             outputs = [y] + a
             grad_outputs = [dy] + da
-            inputs = [x] + all_attn_hiddens[i]
+            inputs = self.all_paramters + [x] + all_attn_hiddens[i]
             # TODO: also calculate the grad to the weights, check why retain_graph is necessary.
             all_grads = torch.autograd.grad(outputs, inputs, grad_outputs, retain_graph=True)
-            dx = all_grads[0]
-            da = list(all_grads[1:])
+            dw = all_grads[:self.n_params]
+            dx = all_grads[self.n_params]
+            da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
+            for grad_w, w in zip(dw, self.all_paramters):
+                if w.grad is None:
+                    w.grad = grad_w
+                else:
+                    w.grad += grad_w
+        self.optimizer.step()
+
+    def calc(self):
+        start_time = time.time()
+        self.step()
+        step_time = time.time() - start_time
+        print("step_time:", step_time)
 
     def run(self):
         t = threading.Thread(target=self.calc)
