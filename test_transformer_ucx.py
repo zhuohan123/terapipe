@@ -100,7 +100,7 @@ class UCXTransformerRunner:
         start_time = time.time()
         for i in range(self.n_slices):
             x = self.q_in.get()
-            x.requires_grad = True
+            x.requires_grad_()
             all_inputs.append(x)
             new_attn_caches_detached = []
             attn_hiddens = []
@@ -108,7 +108,7 @@ class UCXTransformerRunner:
             for layer, attn_cache in zip(self.layers, attn_caches):
                 x, new_attn_cache = layer(x, attn_cache)
                 attn_hiddens += [v for k, v in new_attn_cache.items()]
-                new_attn_cache_detached = {k: v.detach() for k, v in new_attn_cache.items()}
+                new_attn_cache_detached = {k: v.detach().requires_grad_() for k, v in new_attn_cache.items()}
                 attn_hiddens_detached += [v for k, v in new_attn_cache_detached.items()]
                 new_attn_caches_detached.append(new_attn_cache_detached)
             attn_caches = new_attn_caches_detached
