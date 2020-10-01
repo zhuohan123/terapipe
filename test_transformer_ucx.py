@@ -115,6 +115,7 @@ class UCXTransformerRunner:
             all_attn_hiddens.append(attn_hiddens)
             all_attn_hiddens_detached.append(attn_hiddens_detached)
             all_outputs.append(x)
+            torch.cuda.synchronize()
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
         print("rank", self.rank, "forward_time", time.time() - start_time)
 
@@ -136,6 +137,7 @@ class UCXTransformerRunner:
             dx = all_grads[self.n_params]
             da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
+            torch.cuda.synchronize()
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
             for grad_w, w in zip(dw, self.all_paramters):
                 if w.grad is None:
