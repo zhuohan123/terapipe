@@ -5,6 +5,7 @@ import threading
 import queue
 import asyncio
 import argparse
+import traceback
 import time
 import torch
 from transformer_models import (
@@ -130,17 +131,22 @@ class UCXTransformerRunner:
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
             for grad_w, w in zip(dw, self.all_paramters):
                 if w.grad is None:
-                    w.grad = grad_w
+                    w.grad = grad_w.detach()
                 else:
                     w.grad += grad_w
         self.optimizer.step()
 
     def calc(self):
-        for _ in self.n_steps:
+        for _ in range(self.n_steps):
             start_time = time.time()
-            self.step()
+            try:
+                self.step()
+            except Exception as e:
+                track = traceback.format_exc()
+                print(f"rank = {self.rank}", track, flush=True)
+                exit(1)
             step_time = time.time() - start_time
-            print("step_time:", step_time)
+            print("rank", self.rank, "step_time:", step_time, flush=True)
 
     def run(self):
         t = threading.Thread(target=self.calc)
