@@ -1,25 +1,11 @@
-import random
+import argparse
 import os
 
-from test_transformer import megatron_main, TransformerConfig, set_random_seed
-
-import argparse
-import torch
+from test_transformer import megatron_spawn_tasks, TransformerConfig, set_random_seed
 
 parser = argparse.ArgumentParser(description='List the content of a folder')
 parser.add_argument('ip_address', type=str, help='the IP address of the head node')
 parser.add_argument('-p', '--port', type=int, help='the port of the head node')
-
-
-def megatron_spawn_tasks(world_size, world_rank, ip_address, port, config):
-    assert torch.cuda.device_count() == 1
-    distributed_init_method = f'tcp://{ip_address}:{port}'
-    local_size = torch.cuda.device_count()
-    torch.multiprocessing.spawn(
-        megatron_main,
-        args=(distributed_init_method, world_size, world_rank, config),
-        nprocs=local_size,
-    )
 
 
 if __name__ == "__main__":

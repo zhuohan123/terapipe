@@ -203,10 +203,11 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     return duration / n_testing_steps
 
 
-def megatron_main(local_rank, distributed_init_method, distributed_world_size,
-                  distributed_world_rank, config: TransformerConfig, n_testing_steps=10, profile=False):
-    if distributed_world_rank is None:
-        distributed_world_rank = local_rank
+def megatron_main(local_rank, distributed_init_method, world_size,
+                  world_rank, config: TransformerConfig, n_testing_steps=10, profile=False):
+    local_size = torch.cuda.device_count()
+    distributed_world_size = world_size * local_size
+    distributed_world_rank = world_rank * local_size + local_rank
     dist.init_process_group(
         backend='nccl',
         init_method=distributed_init_method,
@@ -255,14 +256,13 @@ def megatron_main(local_rank, distributed_init_method, distributed_world_size,
     print("megatron (s/it):", duration / n_testing_steps)
 
 
-def megatron_spawn_tasks(config):
-    port = random.randint(10000, 20000)
-    distributed_init_method = 'tcp://localhost:{port}'.format(port=port)
-    distributed_world_size = torch.cuda.device_count()
+def megatron_spawn_tasks(world_size, world_rank, ip_address, port, config):
+    distributed_init_method = f'tcp://{ip_address}:{port}'
+    local_size = torch.cuda.device_count()
     torch.multiprocessing.spawn(
         megatron_main,
-        args=(distributed_init_method, distributed_world_size, None, config),
-        nprocs=distributed_world_size
+        args=(distributed_init_method, world_size, world_rank, config),
+        nprocs=local_size,
     )
 
 
@@ -285,4 +285,4 @@ if __name__ == "__main__":
     elif sys.argv[1] == "seqpipe":
         print("seqpipe (s/it):", seqpipe_time(config))
     elif sys.argv[1] == "megatron":
-        megatron_spawn_tasks(config)
+        megatron_spawn_tasks(1, 0, 'localhost', random.randint(10000, 20000), config)
