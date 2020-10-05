@@ -238,3 +238,13 @@ class PipelinedTransformer(nn.Module):
         for thread in threads:
             thread.join()
         return results
+
+
+def save_layers(layers, layer_ids, prefix):
+    for i, layer in zip(layer_ids, layers):
+        torch.save(layer.state_dict(), ".".join(prefix, i))
+
+
+def load_layers(layers, layer_ids, prefix):
+    for i, layer in zip(layer_ids, layers):
+        layer.load_state_dict(torch.load(".".join(prefix, i)))
