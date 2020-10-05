@@ -268,9 +268,9 @@ if __name__ == "__main__":
     set_random_seed(0)
     config = TransformerConfig(
         batch_size=1,
-        seq_len=1024,
-        n_layers=72,
-        embedding_dim=2048,
+        seq_len=128,
+        n_layers=12,
+        embedding_dim=256,
         placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
     )
     assert len(sys.argv) > 1
