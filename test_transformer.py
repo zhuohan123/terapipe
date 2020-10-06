@@ -143,8 +143,8 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10):
 def check_correctness(config: TransformerConfig, checkpoint_path: str):
     transformer_layers, x = config.create_layers_and_inputs()
     transformer_layers = [layer.cuda(0) for layer in transformer_layers]
-    save_layers(transformer_layers, range(len(transformer_layers)), checkpoint_path)
     x = x.cuda(0)
+    save_layers_and_inputs(transformer_layers, range(len(transformer_layers)), x, checkpoint_path)
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
     single_device_transformer.zero_grad()
     y, _ = single_device_transformer(x)
