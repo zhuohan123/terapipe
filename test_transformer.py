@@ -12,7 +12,7 @@ import sys
 from transformer_models import (
     TransformerConfig, TransformerLayer,
     SingleDeviceTransformer, PipelinedTransformer,
-    ModelParallelTransformerLayer
+    ModelParallelTransformerLayer, save_layers_and_inputs,
 )
 
 
@@ -138,6 +138,19 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10):
     torch.cuda.synchronize()
     duration = time.time() - start
     return duration / n_testing_steps
+
+
+def check_correctness(config: TransformerConfig, checkpoint_path: str):
+    transformer_layers, x = config.create_layers_and_inputs()
+    transformer_layers = [layer.cuda(0) for layer in transformer_layers]
+    save_layers(transformer_layers, range(len(transformer_layers)), checkpoint_path)
+    x = x.cuda(0)
+    single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    single_device_transformer.zero_grad()
+    y, _ = single_device_transformer(x)
+    loss = torch.mean(y)
+    loss.backward()
+    torch.cuda.synchronize()
 
 
 def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
@@ -269,7 +282,7 @@ if __name__ == "__main__":
     config = TransformerConfig(
         batch_size=1,
         seq_len=128,
-        n_layers=12,
+        n_layers=24,
         embedding_dim=256,
         placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
     )
@@ -278,6 +291,9 @@ if __name__ == "__main__":
         grid_search_forward_time()
     elif sys.argv[1] == "single":
         print("single_device (s/it):", single_device_time(config))
+    elif sys.argv[1] == "correctness":
+        assert len(sys.argv) > 2
+        check_correctness(config, sys.argv[2])
     elif sys.argv[1] == "gpipe":
         print("gpipe (s/it):", gpipe_time(config))
     elif sys.argv[1] == "seqpipe":
