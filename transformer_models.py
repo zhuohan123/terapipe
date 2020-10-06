@@ -241,8 +241,9 @@ class PipelinedTransformer(nn.Module):
 
 
 def save_layers_and_inputs(layers, grad_layers, layer_ids, inputs, prefix):
-    for i, layer in zip(layer_ids, layers):
+    for i, layer, grad in zip(layer_ids, layers, grad_layers):
         torch.save(layer.state_dict(), ".".join([prefix, str(i)]))
+        torch.save(grad, ".".join([prefix, 'grad', str(i)]))
     torch.save(inputs, ".".join([prefix, "inputs"]))
 
 
