@@ -144,13 +144,20 @@ def check_correctness(config: TransformerConfig, checkpoint_path: str):
     transformer_layers, x = config.create_layers_and_inputs()
     transformer_layers = [layer.cuda(0) for layer in transformer_layers]
     x = x.cuda(0)
-    save_layers_and_inputs(transformer_layers, range(len(transformer_layers)), x, checkpoint_path)
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
     single_device_transformer.zero_grad()
     y, _ = single_device_transformer(x)
     loss = torch.mean(y)
     loss.backward()
     torch.cuda.synchronize()
+    grad_layers = []
+    for layer in transformer_layers:
+        grad_layer = []
+        for param in layer.parameters():
+            grad_layer.append(param.grad)
+        grad_layers.append(grad_layer)
+    save_layers_and_inputs(transformer_layers, grad_layers,
+                           range(len(transformer_layers)), x, checkpoint_path)
 
 
 def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
