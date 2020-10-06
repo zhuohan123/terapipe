@@ -9,9 +9,7 @@ import traceback
 import time
 import torch
 from transformer_models import (
-    TransformerConfig, TransformerLayer,
-    SingleDeviceTransformer, PipelinedTransformer,
-    ModelParallelTransformerLayer
+    TransformerConfig, load_layers, load_grads, load_inputs
 )
 
 
@@ -29,8 +27,10 @@ def uniform_slice_x(x, n_slices):
 
 class UCXTransformerRunner:
     def __init__(self, config, n_slices, my_address, my_port, prev_address,
-                 prev_port, rank, world_size, n_steps=10):
+                 prev_port, rank, world_size, n_steps=10, check_correctness=False,
+                 checkpoint_path=None):
         self.config = config
+        self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_slices = n_slices
         self.my_address = my_address
         self.my_port = my_port
@@ -43,12 +43,22 @@ class UCXTransformerRunner:
         self.q_out = asyncio.Queue(loop=self.loop)
         self.rank = rank
         self.world_size = world_size
+        self.check_correctness = check_correctness
+        self.prefix = checkpoint_path
         self.layers = self.config.create_layers_gpu()
-        self.all_paramters = []
+        if self.check_correctness:
+            load_layers(self.layers,
+                        range(self.rank * self.n_layers,
+                              self.rank * self.n_layers + self.n_layers),
+                        self.prefix)
+            print("Rank {} loaded layers: {}-{}".format(
+                self.rank, self.rank * self.n_layers,
+                self.rank * self.n_layers + self.n_layers))
+        self.all_parameters = []
         for layer in self.layers:
-            self.all_paramters += list(layer.parameters())
-        self.n_params = len(self.all_paramters)
-        self.optimizer = torch.optim.SGD(self.all_paramters, lr=1e-10)
+            self.all_parameters += list(layer.parameters())
+        self.n_params = len(self.all_parameters)
+        self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
         self.n_steps = n_steps
 
     async def ucx_main(self, prev_ep, next_ep):
@@ -59,8 +69,12 @@ class UCXTransformerRunner:
 
     async def recv_coroutine(self, prev_ep=None, next_ep=None):
         for _ in range(self.n_steps):
-            x = (self.config.create_inputs_empty()
-                 if prev_ep is not None else self.config.create_inputs())
+            if self.check_correctness:
+                x = load_inputs(self.prefix)
+                print("Rank {} loaded input x".format(self.rank))
+            else:
+                x = (self.config.create_inputs_empty()
+                     if prev_ep is not None else self.config.create_inputs())
             sliced_x = uniform_slice_x(x, self.n_slices)
             for s in sliced_x:
                 if prev_ep is not None:
@@ -174,6 +188,8 @@ def main():
     parser.add_argument('--prev-port', metavar='PORT', type=int, default=None)
     parser.add_argument('--rank', metavar='I', type=int, default=0)
     parser.add_argument('--world-size', metavar='N', type=int, default=1)
+    parser.add_argument('--check-correctness', action='store_true')
+    parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
     args = parser.parse_args()
 
     config = TransformerConfig(
@@ -187,7 +203,9 @@ def main():
 
     runner = UCXTransformerRunner(
         config, n_slices, args.my_address, args.my_port, args.prev_address,
-        args.prev_port, args.rank, args.world_size)
+        args.prev_port, args.rank, args.world_size, args.check_correctness,
+        args.checpoint_path,
+    )
     runner.run()
 
 

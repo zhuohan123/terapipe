@@ -250,3 +250,14 @@ def save_layers_and_inputs(layers, grad_layers, layer_ids, inputs, prefix):
 def load_layers(layers, layer_ids, prefix):
     for i, layer in zip(layer_ids, layers):
         layer.load_state_dict(torch.load(".".join([prefix, str(i)])))
+
+
+def load_grads(layer_ids, prefix):
+    all_grads = []
+    for i in layer_ids:
+        all_grads.append(torch.load(".".join([prefix, str(i)])))
+    return all_grads
+
+
+def load_inputs(prefix):
+    return torch.load(".".join([prefix, "inputs"]))
