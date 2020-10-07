@@ -255,7 +255,7 @@ def load_layers(layers, layer_ids, prefix):
 def load_grads(layer_ids, prefix):
     all_grads = []
     for i in layer_ids:
-        all_grads.append(torch.load(".".join([prefix, str(i)])))
+        all_grads.append(torch.load(".".join([prefix, 'grad', str(i)])))
     return all_grads
 
 

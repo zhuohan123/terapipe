@@ -183,7 +183,7 @@ class UCXTransformerRunner:
                     print(torch.mean(torch.abs(param.grad - ref_grad)))
         else:
             self.optimizer.step()
-        print("rank", self.rank, "backward_time", time.time() - start_time, flush=TruE)
+        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
 
     def calc(self):
         try:
