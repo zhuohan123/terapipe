@@ -5,9 +5,9 @@ cluster_name: model_parallel
 
 # The maximum number of workers nodes to launch in addition to the head
 # node. This takes precedence over min_workers. min_workers defaults to 0.
-min_workers: 7
-initial_workers: 7
-max_workers: 7
+min_workers: 3
+initial_workers: 3
+max_workers: 3
 
 # Cloud-provider specific configuration.
 provider:
