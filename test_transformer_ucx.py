@@ -144,7 +144,7 @@ class UCXTransformerRunner:
             x = all_inputs[i]
             outputs = [y] + a
             grad_outputs = [dy] + da
-            inputs = self.all_paramters + [x] + all_attn_hiddens_detached[i]
+            inputs = self.all_parameters + [x] + all_attn_hiddens_detached[i]
             # TODO: also calculate the grad to the weights, check why retain_graph is necessary.
             all_grads = torch.autograd.grad(outputs, inputs, grad_outputs, retain_graph=True)
             dw = all_grads[:self.n_params]
@@ -153,7 +153,7 @@ class UCXTransformerRunner:
             a = all_attn_hiddens[i]
             torch.cuda.synchronize()
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
-            for grad_w, w in zip(dw, self.all_paramters):
+            for grad_w, w in zip(dw, self.all_parameters):
                 if w.grad is None:
                     w.grad = grad_w.detach()
                 else:
@@ -191,20 +191,21 @@ def main():
     parser.add_argument('--check-correctness', action='store_true')
     parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
     args = parser.parse_args()
+    print("ckpt_path", args.checkpoint_path, flush=True)
 
     config = TransformerConfig(
         batch_size=1,
-        seq_len=1024,
-        n_layers=48,
-        embedding_dim=2048,
+        seq_len=128,
+        n_layers=24,
+        embedding_dim=256,
         n_devices=args.world_size,
     )
     n_slices = 8
 
     runner = UCXTransformerRunner(
         config, n_slices, args.my_address, args.my_port, args.prev_address,
-        args.prev_port, args.rank, args.world_size, args.check_correctness,
-        args.checpoint_path,
+        args.prev_port, args.rank, args.world_size, check_correctness=args.check_correctness,
+        checkpoint_path=args.checkpoint_path,
     )
     runner.run()
 
