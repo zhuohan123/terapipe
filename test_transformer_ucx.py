@@ -43,10 +43,12 @@ class UCXTransformerRunner:
         self.q_out = asyncio.Queue(loop=self.loop)
         self.rank = rank
         self.world_size = world_size
+        self.n_steps = n_steps
         self.check_correctness = check_correctness
         self.prefix = checkpoint_path
         self.layers = self.config.create_layers_gpu()
         if self.check_correctness:
+            self.n_steps = 1
             load_layers(self.layers,
                         range(self.rank * self.n_layers,
                               self.rank * self.n_layers + self.n_layers),
@@ -59,7 +61,6 @@ class UCXTransformerRunner:
             self.all_parameters += list(layer.parameters())
         self.n_params = len(self.all_parameters)
         self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
-        self.n_steps = n_steps
 
     async def ucx_main(self, prev_ep, next_ep):
         assert (prev_ep is None) == (self.rank == 0)
@@ -134,16 +135,18 @@ class UCXTransformerRunner:
             all_outputs.append(x)
             torch.cuda.synchronize()
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
-        print("rank", self.rank, "forward_time", time.time() - start_time)
+        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
         # backward
         start_time = time.time()
         self.optimizer.zero_grad()
 
         if self.rank == self.world_size - 1:
+            print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat(all_outputs, dim=0)
             loss = torch.mean(concated_outputs)
             grad_all_outputs = torch.autograd.grad(loss, all_outputs)
+            print("rank", self.rank, "finish calculating loss", flush=True)
 
         a = []
         da = []
@@ -171,12 +174,15 @@ class UCXTransformerRunner:
                 else:
                     w.grad += grad_w
         self.optimizer.step()
-        print("rank", self.rank, "backward_time", time.time() - start_time)
+        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
 
     def calc(self):
         try:
             if self.check_correctness:
+                start_time = time.time()
                 self.step()
+                step_time = time.time() - start_time
+                print("rank", self.rank, "step_time:", step_time, flush=True)
             else:
                 for _ in range(self.n_steps):
                     start_time = time.time()
