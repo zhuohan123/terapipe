@@ -62,6 +62,8 @@ class UCXTransformerRunner:
         self.n_steps = n_steps
 
     async def ucx_main(self, prev_ep, next_ep):
+        assert (prev_ep is None) == (self.rank == 0)
+        assert (next_ep is None) == (self.rank == self.world_size - 1)
         await asyncio.gather(
             self.recv_coroutine(prev_ep, next_ep),
             self.send_coroutine(prev_ep, next_ep)
@@ -69,36 +71,37 @@ class UCXTransformerRunner:
 
     async def recv_coroutine(self, prev_ep=None, next_ep=None):
         for _ in range(self.n_steps):
-            if self.check_correctness:
+            if self.rank != 0:
+                x = self.config.create_inputs_empty()
+            elif self.check_correctness:
                 x = load_inputs(self.prefix)
                 print("Rank {} loaded input x".format(self.rank))
             else:
-                x = (self.config.create_inputs_empty()
-                     if prev_ep is not None else self.config.create_inputs())
+                x = self.config.create_inputs()
             sliced_x = uniform_slice_x(x, self.n_slices)
             for s in sliced_x:
-                if prev_ep is not None:
+                if self.rank != 0:
                     await prev_ep.recv(s)
                 self.q_in.put(s)
 
-            grad_x = (self.config.create_inputs_empty()
-                      if next_ep is not None else self.config.create_inputs())
-            sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
-            for s in reversed(sliced_grad_x):
-                if next_ep is not None:
-                    await next_ep.recv(s)
-                self.q_in.put(s)
+            if self.rank != self.world_size - 1:
+                grad_x = self.config.create_inputs_empty()
+                sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
+                for s in reversed(sliced_grad_x):
+                    if self.rank != self.world_size - 1:
+                        await next_ep.recv(s)
+                    self.q_in.put(s)
 
     async def send_coroutine(self, prev_ep=None, next_ep=None):
         for _ in range(self.n_steps):
             for _ in range(self.n_slices):
                 y = await self.q_out.get()
-                if next_ep is not None:
+                if self.rank != self.world_size - 1:
                     await next_ep.send(y.detach())
 
             for _ in reversed(range(self.n_slices)):
                 dx = await self.q_out.get()
-                if prev_ep is not None:
+                if self.rank != 0:
                     await prev_ep.send(dx.detach())
 
     async def put_stuff_to_q_out(self, x):
@@ -136,10 +139,19 @@ class UCXTransformerRunner:
         # backward
         start_time = time.time()
         self.optimizer.zero_grad()
+
+        if self.rank == self.world_size - 1:
+            concated_outputs = torch.cat(all_outputs, dim=0)
+            loss = torch.mean(concated_outputs)
+            grad_all_outputs = torch.autograd.grad(loss, all_outputs)
+
         a = []
         da = []
         for i in reversed(range(self.n_slices)):
-            dy = self.q_in.get()
+            if self.rank == self.world_size - 1:
+                dy = grad_all_outputs[i]
+            else:
+                dy = self.q_in.get()
             y = all_outputs[i]
             x = all_inputs[i]
             outputs = [y] + a
@@ -162,16 +174,19 @@ class UCXTransformerRunner:
         print("rank", self.rank, "backward_time", time.time() - start_time)
 
     def calc(self):
-        for _ in range(self.n_steps):
-            start_time = time.time()
-            try:
+        try:
+            if self.check_correctness:
                 self.step()
-            except Exception as e:
-                track = traceback.format_exc()
-                print(f"rank = {self.rank}", track, flush=True)
-                exit(1)
-            step_time = time.time() - start_time
-            print("rank", self.rank, "step_time:", step_time, flush=True)
+            else:
+                for _ in range(self.n_steps):
+                    start_time = time.time()
+                    self.step()
+                    step_time = time.time() - start_time
+                    print("rank", self.rank, "step_time:", step_time, flush=True)
+        except:
+            track = traceback.format_exc()
+            print(f"rank = {self.rank}", track, flush=True)
+            exit(1)
 
     def run(self):
         t = threading.Thread(target=self.calc)
