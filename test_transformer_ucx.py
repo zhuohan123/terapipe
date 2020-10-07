@@ -173,8 +173,17 @@ class UCXTransformerRunner:
                     w.grad = grad_w.detach()
                 else:
                     w.grad += grad_w
-        self.optimizer.step()
-        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
+        if self.check_correctness:
+            all_ref_grads = load_grads(range(self.rank * self.n_layers,
+                                             self.rank * self.n_layers + self.n_layers),
+                                       self.prefix)
+            for layer, ref_grads in zip(self.layers, all_ref_grads):
+                for param, ref_grad in zip(layer.parameters(), ref_grads):
+                    assert param.grad.size() == ref_grad.size()
+                    print(torch.mean(torch.abs(param.grad - ref_grad)))
+        else:
+            self.optimizer.step()
+        print("rank", self.rank, "backward_time", time.time() - start_time, flush=TruE)
 
     def calc(self):
         try:
