@@ -5,7 +5,7 @@ if [ "$#" -gt 1 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many argum
 
 N_NODES=$1
 
-PYTHON_EXEC=/home/ubuntu/anaconda3/envs/ucx/bin/python
+PYTHON_EXEC=python
 PYTHON_SCRIPT=$(realpath -s test_transformer_ucx.py)
 ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/load_cluster_env.sh

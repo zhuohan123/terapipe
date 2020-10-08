@@ -5,9 +5,9 @@ cluster_name: model_parallel
 
 # The maximum number of workers nodes to launch in addition to the head
 # node. This takes precedence over min_workers. min_workers defaults to 0.
-min_workers: 3
-initial_workers: 3
-max_workers: 3
+min_workers: 7
+initial_workers: 7
+max_workers: 7
 
 # Cloud-provider specific configuration.
 provider:
@@ -22,7 +22,7 @@ auth:
 
 head_node:
     InstanceType: p3.2xlarge
-    ImageId: ami-0553c3c3063177698 # pipe-ucx-6
+    ImageId: ami-0f1fc99118aa82e52 # pipe-ucx-7
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
@@ -30,7 +30,7 @@ head_node:
 
 worker_nodes:
     InstanceType: p3.2xlarge
-    ImageId: ami-0553c3c3063177698 # pipe-ucx-6
+    ImageId: ami-0f1fc99118aa82e52 # pipe-ucx-7
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
