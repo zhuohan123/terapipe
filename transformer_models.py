@@ -7,6 +7,25 @@ import queue
 import mpu
 
 NEG_INF = -1e10
+MODEL_CONFIGS = {
+    # n_layers, hidden_size, sequence_length, num_attention_heads
+    "gpt2-1hm":    (12,   768, 1024,   768 // 64),
+    "gpt2-3hm":    (24,  1024, 1024,  1024 // 64),
+    "gpt2-7hm":    (36,  1280, 1024,  1280 // 64),
+    "gpt2-1b":     (48,  1600, 1024,  1600 // 64),
+    "megatron-1b": (40,  1536, 1024,  1536 // 96),
+    "megatron-2b": (54,  1920, 1024,  1920 // 96),
+    "megatron-4b": (64,  2304, 1024,  2304 // 96),
+    "megatron-8b": (72,  3072, 1024,  3072 // 96),
+    "gpt3-1hm":    (12,   768, 2048,   768 // 64),
+    "gpt3-3hm":    (24,  1024, 2048,  1024 // 64),
+    "gpt3-7hm":    (24,  1536, 2048,  1536 // 96),
+    "gpt3-1b":     (24,  2048, 2048,  2048 // 128),
+    "gpt3-2b":     (32,  2560, 2048,  2560 // 80),
+    "gpt3-6b":     (32,  4096, 2048,  4096 // 128),
+    "gpt3-13b":    (40,  5140, 2048,  5140 // 128),
+    "gpt3-175b":   (96, 12288, 2048, 12288 // 128),
+}
 
 
 class TransformerConfig:
@@ -20,13 +39,18 @@ class TransformerConfig:
         num_attention_heads=None,
         placement_orders=None,
         n_devices=None,
+        model_name=None,
     ):
         self.batch_size = batch_size
-        self.seq_len = seq_len
-        self.n_layers = n_layers
-        self.embedding_dim = embedding_dim
-        self.ffn_embedding_dim = ffn_embedding_dim if ffn_embedding_dim else embedding_dim * 4
-        self.num_attention_heads = num_attention_heads if num_attention_heads else embedding_dim // 64
+        if model_name is None:
+            self.seq_len = seq_len
+            self.n_layers = n_layers
+            self.embedding_dim = embedding_dim
+            self.ffn_embedding_dim = ffn_embedding_dim if ffn_embedding_dim else embedding_dim * 4
+            self.num_attention_heads = num_attention_heads if num_attention_heads else embedding_dim // 64
+        else:
+            self.n_layers, self.embedding_dim, self.seq_len, self.num_attention_heads = MODEL_CONFIGS[model_name]
+            self.ffn_embedding_dim = self.embedding_dim * 4
         self.n_devices = torch.cuda.device_count() if n_devices is None else n_devices
         self.placement_orders = placement_orders or list(range(self.n_devices))
 

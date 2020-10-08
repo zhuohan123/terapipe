@@ -9,7 +9,7 @@ import traceback
 import time
 import torch
 from transformer_models import (
-    TransformerConfig, load_layers, load_grads, load_inputs
+    TransformerConfig, load_layers, load_grads, load_inputs, MODEL_CONFIGS
 )
 
 
@@ -220,6 +220,8 @@ def main():
     parser.add_argument('--world-size', metavar='N', type=int, default=1)
     parser.add_argument('--check-correctness', action='store_true')
     parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
+    parser.add_argument('--model', metavar='NAME', type=str, default=None,
+                        options=list(MODEL_CONFIGS.keys()))
     args = parser.parse_args()
     print("ckpt_path", args.checkpoint_path, flush=True)
 
