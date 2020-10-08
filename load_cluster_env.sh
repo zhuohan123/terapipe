@@ -1,6 +1,6 @@
 # This file should only be sourced.
 
-PYTHON_EXEC=python
+PYTHON_EXEC=/home/ubuntu/anaconda3/envs/ucx/bin/python
 MY_IPADDR=$(hostname -i)
 # OTHERS_IPADDR=()
 # for s in $(ray get-worker-ips ~/ray_bootstrap_config.yaml); do
