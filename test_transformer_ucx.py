@@ -221,7 +221,7 @@ def main():
     parser.add_argument('--check-correctness', action='store_true')
     parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
-                        options=list(MODEL_CONFIGS.keys()))
+                        choices=list(MODEL_CONFIGS.keys()))
     args = parser.parse_args()
     print("ckpt_path", args.checkpoint_path, flush=True)
 
