@@ -3,7 +3,7 @@
 cdef extern from "cuda_runtime.h" nogil:
     ctypedef struct CUstream_st:
         pass
-    ctypedef CUstream_st * cudaStream_t
+    ctypedef CUstream_st* cudaStream_t
     cdef enum cudaError:
         cudaSuccess = 0
     ctypedef cudaError cudaError_t
@@ -42,7 +42,7 @@ cdef extern from "nccl.h" nogil:
     # Opaque handle to communicator
     ctypedef struct ncclComm:
         pass
-    ctypedef struct ncclComm* ncclComm_t
+    ctypedef ncclComm* ncclComm_t
 
     DEF NCCL_UNIQUE_ID_BYTES = 128
 
