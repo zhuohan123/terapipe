@@ -59,10 +59,12 @@ def get_unique_id():
 
 cdef class NCCLGroup:
     def __enter__(self):
-        ncclGroupStart()
+        with nogil:
+            ncclGroupStart()
 
     def __exit__(self, exc_type, exc_value, traceback):
-        ncclGroupEnd()
+        with nogil:
+            ncclGroupEnd()
 
 
 cdef class NCCL:
@@ -71,12 +73,13 @@ cdef class NCCL:
         int nranks
         # map from rank to ncclComm_t
         unordered_map[int, ncclComm_t] comm_map
+        # map from device_id to rank
+        public object dev_map
 
     def __cinit__(self, bytes unique_id, int nranks):
         cdef c_string id_string = unique_id
         memcpy(self._unique_id.internal, id_string.c_str(), id_string.length())
         self.nranks = nranks
-        # map from device_id to rank
         self.dev_map = {}
 
     def init_rank(self, int device_id, int rank):
