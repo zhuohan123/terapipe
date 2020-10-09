@@ -9,10 +9,7 @@ ext_modules = [
         sources=["_nccl.pyx"],
         include_dirs=[os.path.abspath("/usr/local/cuda/include/")],
         library_dirs=[os.path.abspath("/usr/local/cuda/lib/")],
-        # libraries=["distributed_object_store"],
-        # this is necessary for the dynamic linking of Linux to
-        # be working in a distributed environment
-        extra_link_args=['-Wl,-rpath='+os.path.abspath(".")],
+        libraries=["nccl", "cudart"],
         language="c++",
     )
 ]

@@ -53,7 +53,8 @@ def _probe_tensor(tensor):
 def get_unique_id():
     cdef ncclUniqueId uid
     ncclGetUniqueId(&uid)
-    return uid.internal
+    # hint Cython to return a fixed size bytes, not a '\0' ended string
+    return uid.internal[:NCCL_UNIQUE_ID_BYTES]
 
 
 cdef class NCCLGroup:

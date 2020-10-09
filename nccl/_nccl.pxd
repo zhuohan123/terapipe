@@ -44,10 +44,11 @@ cdef extern from "nccl.h" nogil:
         pass
     ctypedef ncclComm* ncclComm_t
 
-    DEF NCCL_UNIQUE_ID_BYTES = 128
+    cdef int NCCL_UNIQUE_ID_BYTES = 128
+    DEF _NCCL_UNIQUE_ID_BYTES = 128
 
     ctypedef struct ncclUniqueId:
-        char internal[NCCL_UNIQUE_ID_BYTES]
+        char internal[_NCCL_UNIQUE_ID_BYTES]
 
     const char* ncclGetErrorString(ncclResult_t result)
 
