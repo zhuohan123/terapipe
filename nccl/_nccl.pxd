@@ -4,7 +4,7 @@ cdef extern from "cuda_runtime.h" nogil:
     ctypedef struct CUstream_st:
         pass
     ctypedef CUstream_st* cudaStream_t
-    cdef enum cudaError:
+    ctypedef enum cudaError:
         cudaSuccess = 0
     ctypedef cudaError cudaError_t
     cdef cudaError_t cudaSetDevice(int device)
@@ -13,7 +13,7 @@ cdef extern from "cuda_runtime.h" nogil:
 
 
 cdef extern from "nccl.h" nogil:
-    cdef enum ncclResult_t:
+    ctypedef enum ncclResult_t:
         ncclSuccess                 =  0
         ncclUnhandledCudaError      =  1
         ncclSystemError             =  2
@@ -22,7 +22,7 @@ cdef extern from "nccl.h" nogil:
         ncclInvalidUsage            =  5
         ncclNumResults              =  6 
 
-    cdef enum ncclDataType_t:
+    ctypedef enum ncclDataType_t:
         ncclInt8       = 0
         ncclChar       = 0
         ncclUint8      = 1

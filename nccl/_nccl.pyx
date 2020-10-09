@@ -1,9 +1,11 @@
+from libc.stdint cimport uint8_t, int32_t, uint64_t, int64_t, uint32_t, intptr_t
+from libc.string cimport memcpy
+
 from libcpp cimport bool as c_bool
 from libcpp.memory cimport shared_ptr, unique_ptr
-from libcpp.string cimport string as c_string, memset, memcpy
+from libcpp.string cimport string as c_string
 from libcpp.unordered_map cimport unordered_map
 
-from libc.stdint cimport uint8_t, int32_t, uint64_t, int64_t, uint32_t, intptr_t
 from _nccl cimport *
 
 from cython.operator cimport dereference, postincrement
@@ -12,7 +14,7 @@ import torch
 
 # TODO(Siyuan): python error handling for NCCL
 
-def _get_native_cuda_stream(stream=None, tensor=None):
+cdef cudaStream_t _get_native_cuda_stream(stream=None, tensor=None):
     if stream is None:
         if tensor is None:
             raise ValueError("stream and tensor cannot both be None")
@@ -22,7 +24,7 @@ def _get_native_cuda_stream(stream=None, tensor=None):
         else:
             raise ValueError("Unknown tensor")
     if isinstance(stream, torch.cuda.streams.Stream):
-        return stream.cuda_stream
+        return <cudaStream_t><intptr_t>stream.cuda_stream
     else:
         raise ValueError("Unknown stream")
 
@@ -37,12 +39,12 @@ cdef ncclDataType_t _type_from_string(s):
 
 
 def _probe_tensor(tensor):
-    if isinstance(torch.Tensor):
+    if isinstance(tensor, torch.Tensor):
         assert tensor.device.type == 'cuda'
         device_id = tensor.device.index
-        buff = a.data_ptr()
-        count = a.numel()
-        dtype = str(a.dtype).lstrip('torch.')
+        buff = tensor.data_ptr()
+        count = tensor.numel()
+        dtype = str(tensor.dtype).lstrip('torch.')
     else:
         raise ValueError("unknown tensor")
     return device_id, buff, count, dtype
@@ -91,31 +93,36 @@ cdef class NCCL:
 
     def send_tensor(self, tensor, int peer, stream=None):
         cdef:
-            int cuda_stream
             ncclComm_t comm
             intptr_t sendbuff
             size_t count
+            cudaStream_t cuda_stream
+            ncclDataType_t nccltype
         cuda_stream = _get_native_cuda_stream(stream, tensor)
         device_id, sendbuff, count, dtype = _probe_tensor(tensor)
         comm = self.comm_map[self.dev_map[device_id]]
+        nccltype = _type_from_string(dtype)
         with nogil:
-            ncclSend(<const void*>sendbuff, count, _type_from_string(dtype), peer, comm, cuda_stream)
+            ncclSend(<const void*>sendbuff, count, nccltype, peer, comm, cuda_stream)
 
     def recv_tensor(self, tensor, int peer, stream=None):
         cdef:
-            int cuda_stream
             ncclComm_t comm
             intptr_t recvbuff
             size_t count
+            cudaStream_t cuda_stream
+            ncclDataType_t nccltype
         cuda_stream = _get_native_cuda_stream(stream, tensor)
         device_id, recvbuff, count, dtype = _probe_tensor(tensor)
         comm = self.comm_map[self.dev_map[device_id]]
+        nccltype = _type_from_string(dtype)
         with nogil:
-            ncclRecv(<void*>recvbuff, count, _type_from_string(dtype), peer, comm, cuda_stream)
+            ncclRecv(<void*>recvbuff, count, nccltype, peer, comm, cuda_stream)
 
     def __dealloc__(self):
-        cdef unordered_map[int, ncclComm_t].iterator it = comm_map.begin()
-        # finalize NCCL
-        while(it != comm_map.end()):
-            ncclCommDestroy(dereference(it).second)
-            postincrement(it)
+        cdef unordered_map[int, ncclComm_t].iterator it = self.comm_map.begin()
+        with nogil:
+            # finalize NCCL
+            while(it != self.comm_map.end()):
+              ncclCommDestroy(dereference(it).second)
+              postincrement(it)
