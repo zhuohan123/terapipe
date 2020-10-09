@@ -17,4 +17,4 @@ ext_modules = [
 ]
 
 setup(name="py_nccl_sendrecv",
-      ext_modules=cythonize(ext_modules))
+      ext_modules=cythonize(ext_modules, compiler_directives={'language_level': "3"}))
