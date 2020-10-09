@@ -6,10 +6,10 @@ from Cython.Build import cythonize
 ext_modules = [
     Extension(
         "py_nccl_sendrecv",
-        sources=["python/_client.pyx"],
+        sources=["_nccl.pyx"],
         include_dirs=[os.path.abspath("/usr/local/cuda/include/")],
         library_dirs=[os.path.abspath("/usr/local/cuda/lib/")],
-        libraries=["distributed_object_store"],
+        # libraries=["distributed_object_store"],
         # this is necessary for the dynamic linking of Linux to
         # be working in a distributed environment
         extra_link_args=['-Wl,-rpath='+os.path.abspath(".")],
