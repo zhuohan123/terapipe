@@ -1,6 +1,6 @@
 # NCCL configuration
 
-First, download NCCL  2.7.8, for CUDA 10.1, O/S agnostic local installer: https://developer.nvidia.com/nccl/nccl-download.
+First, download NCCL 2.7.8 for CUDA 10.1, O/S agnostic local installer: https://developer.nvidia.com/nccl/nccl-download.
 
 ```bash
 # Change CUDA runtime to 10.1
@@ -13,3 +13,7 @@ sudo cp -rf $NCCL_VERSION/include/* /usr/local/cuda/include/
 sudo cp -rf $NCCL_VERSION/lib /usr/local/cuda
 rm -r $NCCL_VERSION
 ```
+
+# Build NCCL python wrapper
+
+Run `./build.sh`. Use `round_trip_test.py` for testing.
