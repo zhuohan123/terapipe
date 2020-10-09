@@ -22,7 +22,7 @@ auth:
 
 head_node:
     InstanceType: p3.2xlarge
-    ImageId: ami-060dfb94d8acf0d62
+    ImageId: ami-0b15f811c03fda864
     KeyName: siyuan-aws
     InstanceMarketOptions:
         MarketType: spot
@@ -30,20 +30,24 @@ head_node:
         - DeviceName: /dev/sda1
           Ebs:
               VolumeSize: 300
+    Placement:
+        GroupName: hoplite-group
 
 
 worker_nodes:
     InstanceType: p3.2xlarge
-    ImageId: ami-060dfb94d8acf0d62
+    ImageId: ami-0b15f811c03fda864
     KeyName: siyuan-aws
     InstanceMarketOptions:
         MarketType: spot
+        # SpotOptions:
+        #     MaxPrice: "9.0"
     BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
               VolumeSize: 300
-    # SpotOptions:
-    #     MaxPrice: "9.0"
+    Placement:
+        GroupName: hoplite-group
 
 
 setup_commands:
