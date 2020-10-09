@@ -1,10 +1,12 @@
 # cython: language_level = 3
 
 cdef extern from "cuda_runtime.h" nogil:
+    ctypedef struct CUstream_st:
+        pass
     ctypedef CUstream_st * cudaStream_t
     cdef enum cudaError:
         cudaSuccess = 0
-    ctypedef enum cudaError cudaError_t
+    ctypedef cudaError cudaError_t
     cdef cudaError_t cudaSetDevice(int device)
     cdef cudaError_t cudaGetDevice(int* device)
     cdef const char* cudaGetErrorString(cudaError_t error)
@@ -20,7 +22,7 @@ cdef extern from "nccl.h" nogil:
         ncclInvalidUsage            =  5
         ncclNumResults              =  6 
 
-    cdef enum ncclDataType_t
+    cdef enum ncclDataType_t:
         ncclInt8       = 0
         ncclChar       = 0
         ncclUint8      = 1
@@ -38,9 +40,11 @@ cdef extern from "nccl.h" nogil:
         ncclNumTypes   = 9
 
     # Opaque handle to communicator
+    ctypedef struct ncclComm:
+        pass
     ctypedef struct ncclComm* ncclComm_t
 
-    cdef int NCCL_UNIQUE_ID_BYTES
+    DEF NCCL_UNIQUE_ID_BYTES = 128
 
     ctypedef struct ncclUniqueId:
         char internal[NCCL_UNIQUE_ID_BYTES]
