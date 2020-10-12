@@ -1,9 +1,10 @@
 #!/bin/bash
 
-if [ "$#" -lt 1 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes required"; exit -1; fi
-if [ "$#" -gt 1 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
+if [ "$#" -lt 2 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, model name required"; exit -1; fi
+if [ "$#" -gt 2 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 
 N_NODES=$1
+MODEL=$2
 
 PYTHON_EXEC=/home/ubuntu/anaconda3/envs/ucx/bin/python
 PYTHON_SCRIPT=$(realpath -s test_transformer_ucx.py)
@@ -27,6 +28,7 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --my-port 7777 \
         --rank ${i} \
         --world-size ${N_NODES} \
+        --model $MODEL \
     &
   elif [ ${i} == $((N_NODES - 1)) ]; then
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
@@ -35,6 +37,7 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --prev-port 7777 \
         --rank ${i} \
         --world-size ${N_NODES} \
+        --model $MODEL \
     &
   else
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
@@ -45,6 +48,7 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --prev-port 7777 \
         --rank ${i} \
         --world-size ${N_NODES} \
+        --model $MODEL \
     &
   fi
   PREV_ADDR=${NODE_ADDR}

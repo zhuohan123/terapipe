@@ -292,6 +292,7 @@ if __name__ == "__main__":
         n_layers=24,
         embedding_dim=256,
         placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
+        model_name="gpt3-3hm"
     )
     assert len(sys.argv) > 1
     if sys.argv[1] == "gridsearch":

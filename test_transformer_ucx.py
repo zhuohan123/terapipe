@@ -133,7 +133,6 @@ class UCXTransformerRunner:
             all_attn_hiddens.append(attn_hiddens)
             all_attn_hiddens_detached.append(attn_hiddens_detached)
             all_outputs.append(x)
-            torch.cuda.synchronize()
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
@@ -166,7 +165,6 @@ class UCXTransformerRunner:
             dx = all_grads[self.n_params]
             da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
-            torch.cuda.synchronize()
             asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
             for grad_w, w in zip(dw, self.all_parameters):
                 if w.grad is None:
@@ -184,6 +182,7 @@ class UCXTransformerRunner:
         else:
             self.optimizer.step()
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
+        torch.cuda.synchronize()
 
     def calc(self):
         try:
@@ -223,14 +222,14 @@ def main():
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
     args = parser.parse_args()
-    print("ckpt_path", args.checkpoint_path, flush=True)
 
     config = TransformerConfig(
         batch_size=1,
-        seq_len=128,
-        n_layers=24,
-        embedding_dim=256,
+        seq_len=1024,
+        n_layers=48,
+        embedding_dim=2048,
         n_devices=args.world_size,
+        model_name=args.model,
     )
     n_slices = 8
 
