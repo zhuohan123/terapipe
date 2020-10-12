@@ -4,6 +4,7 @@ if [ "$#" -lt 1 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of node
 if [ "$#" -gt 1 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 
 N_NODES=$1
+MODEL=test
 
 PYTHON_EXEC=/home/ubuntu/anaconda3/envs/ucx/bin/python
 PYTHON_SCRIPT=$(realpath -s test_transformer_ucx.py)
@@ -30,6 +31,7 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --world-size ${N_NODES} \
         --check-correctness \
         --checkpoint-path ${CHECKPOINT_PATH} \
+        --model ${MODEL} \
     &
   elif [ ${i} == $((N_NODES - 1)) ]; then
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
@@ -40,6 +42,7 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --world-size ${N_NODES} \
         --check-correctness \
         --checkpoint-path ${CHECKPOINT_PATH} \
+        --model ${MODEL} \
     &
   else
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
@@ -52,6 +55,7 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --world-size ${N_NODES} \
         --check-correctness \
         --checkpoint-path ${CHECKPOINT_PATH} \
+        --model ${MODEL} \
     &
   fi
   PREV_ADDR=${NODE_ADDR}

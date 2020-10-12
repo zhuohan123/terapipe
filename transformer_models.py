@@ -9,6 +9,7 @@ import mpu
 NEG_INF = -1e10
 MODEL_CONFIGS = {
     # n_layers, hidden_size, sequence_length, num_attention_heads
+    "test":        (24,   256,  128,   256 // 64),
     "gpt2-1hm":    (12,   768, 1024,   768 // 64),
     "gpt2-3hm":    (24,  1024, 1024,  1024 // 64),
     "gpt2-7hm":    (36,  1280, 1024,  1280 // 64),

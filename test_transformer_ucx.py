@@ -48,7 +48,6 @@ class UCXTransformerRunner:
         self.prefix = checkpoint_path
         self.layers = self.config.create_layers_gpu()
         if self.check_correctness:
-            self.n_steps = 1
             load_layers(self.layers,
                         range(self.rank * self.n_layers,
                               self.rank * self.n_layers + self.n_layers),
@@ -186,17 +185,11 @@ class UCXTransformerRunner:
 
     def calc(self):
         try:
-            if self.check_correctness:
+            for _ in range(self.n_steps):
                 start_time = time.time()
                 self.step()
                 step_time = time.time() - start_time
                 print("rank", self.rank, "step_time:", step_time, flush=True)
-            else:
-                for _ in range(self.n_steps):
-                    start_time = time.time()
-                    self.step()
-                    step_time = time.time() - start_time
-                    print("rank", self.rank, "step_time:", step_time, flush=True)
         except:
             track = traceback.format_exc()
             print(f"rank = {self.rank}", track, flush=True)
