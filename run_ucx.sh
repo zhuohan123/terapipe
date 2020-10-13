@@ -1,10 +1,12 @@
 #!/bin/bash
 
-if [ "$#" -lt 2 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, model name required"; exit -1; fi
-if [ "$#" -gt 2 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
+if [ "$#" -lt 4 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, model name, number of slices, number of steps required"; exit -1; fi
+if [ "$#" -gt 4 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 
 N_NODES=$1
 MODEL=$2
+N_SLICES=$3
+N_STEPS=$4
 
 PYTHON_EXEC=/home/ubuntu/anaconda3/envs/ucx/bin/python
 PYTHON_SCRIPT=$(realpath -s test_transformer_ucx.py)

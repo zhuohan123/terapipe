@@ -9,10 +9,12 @@ import torch.nn.functional as F
 import mpu
 import itertools
 import sys
+import argparse
 from transformer_models import (
     TransformerConfig, TransformerLayer,
     SingleDeviceTransformer, PipelinedTransformer,
     ModelParallelTransformerLayer, save_layers_and_inputs,
+    MODEL_CONFIGS,
 )
 
 
@@ -285,6 +287,15 @@ def megatron_spawn_tasks(config):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Different parallel methods for the Transformer')
+    parser.add_argument('--type', metavar='NAME', type=str, default=None,
+                        choices=["gridsearch", "single", "correctness", "gpipe", "seqpipe", "megatron"])
+    parser.add_argument('--model', metavar='NAME', type=str, default=None,
+                        choices=list(MODEL_CONFIGS.keys()))
+    parser.add_argument('--n-slices', metavar='N', type=int, default=8)
+    parser.add_argument('--n-steps', metavar='N', type=int, default=10)
+    parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
+    args = parser.parse_args()
     set_random_seed(0)
     config = TransformerConfig(
         batch_size=1,
@@ -292,19 +303,18 @@ if __name__ == "__main__":
         n_layers=24,
         embedding_dim=256,
         placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
-        model_name="gpt3-3hm"
+        model_name=args.model,
     )
-    assert len(sys.argv) > 1
     if sys.argv[1] == "gridsearch":
         grid_search_forward_time()
     elif sys.argv[1] == "single":
-        print("single_device (s/it):", single_device_time(config))
+        print("single_device (s/it):", single_device_time(config, n_testing_steps=args.n_steps))
     elif sys.argv[1] == "correctness":
-        assert len(sys.argv) > 2
-        check_correctness(config, sys.argv[2])
+        assert args.checkpoint_path is not None
+        check_correctness(config, args.checkpoint_path)
     elif sys.argv[1] == "gpipe":
-        print("gpipe (s/it):", gpipe_time(config))
+        print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_stpes))
     elif sys.argv[1] == "seqpipe":
-        print("seqpipe (s/it):", seqpipe_time(config))
+        print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices))
     elif sys.argv[1] == "megatron":
         megatron_spawn_tasks(config)

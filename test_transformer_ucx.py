@@ -27,7 +27,7 @@ def uniform_slice_x(x, n_slices):
 
 class UCXTransformerRunner:
     def __init__(self, config, n_slices, my_address, my_port, prev_address,
-                 prev_port, rank, world_size, n_steps=10, check_correctness=False,
+                 prev_port, rank, world_size, n_steps, check_correctness=False,
                  checkpoint_path=None):
         self.config = config
         self.n_layers = self.config.n_layers // self.config.n_devices
@@ -213,6 +213,8 @@ def main():
     parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
+    parser.add_argument('--n-slices', metavar='N', type=int, default=8)
+    parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     args = parser.parse_args()
 
     config = TransformerConfig(
@@ -223,11 +225,10 @@ def main():
         n_devices=args.world_size,
         model_name=args.model,
     )
-    n_slices = 8
 
     runner = UCXTransformerRunner(
-        config, n_slices, args.my_address, args.my_port, args.prev_address,
-        args.prev_port, args.rank, args.world_size, check_correctness=args.check_correctness,
+        config, args.n_slices, args.my_address, args.my_port, args.prev_address,
+        args.prev_port, args.rank, args.world_size, args.n_steps, check_correctness=args.check_correctness,
         checkpoint_path=args.checkpoint_path,
     )
     runner.run()
