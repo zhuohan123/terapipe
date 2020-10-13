@@ -31,6 +31,8 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --rank ${i} \
         --world-size ${N_NODES} \
         --model $MODEL \
+        --n-slices ${N_SLICES} \
+        --n-steps ${N_STEPS} \
     &
   elif [ ${i} == $((N_NODES - 1)) ]; then
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
@@ -40,6 +42,8 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --rank ${i} \
         --world-size ${N_NODES} \
         --model $MODEL \
+        --n-slices ${N_SLICES} \
+        --n-steps ${N_STEPS} \
     &
   else
     ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
@@ -51,6 +55,8 @@ for i in $(seq 0 $((N_NODES - 1))); do
         --rank ${i} \
         --world-size ${N_NODES} \
         --model $MODEL \
+        --n-slices ${N_SLICES} \
+        --n-steps ${N_STEPS} \
     &
   fi
   PREV_ADDR=${NODE_ADDR}
