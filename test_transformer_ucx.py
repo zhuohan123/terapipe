@@ -158,8 +158,7 @@ class UCXTransformerRunner:
             outputs = [y] + a
             grad_outputs = [dy] + da
             inputs = self.all_parameters + [x] + all_attn_hiddens_detached[i]
-            # TODO: also calculate the grad to the weights, check why retain_graph is necessary.
-            all_grads = torch.autograd.grad(outputs, inputs, grad_outputs, retain_graph=True)
+            all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
             dw = all_grads[:self.n_params]
             dx = all_grads[self.n_params]
             da = list(all_grads[self.n_params + 1:])
