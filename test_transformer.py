@@ -275,13 +275,13 @@ def megatron_main(distributed_rank, distributed_init_method, distributed_world_s
     print("megatron (s/it):", duration / n_testing_steps)
 
 
-def megatron_spawn_tasks(config):
+def megatron_spawn_tasks(config, n_testing_steps=10):
     port = random.randint(10000, 20000)
     distributed_init_method = 'tcp://localhost:{port}'.format(port=port)
     distributed_world_size = torch.cuda.device_count()
     torch.multiprocessing.spawn(
         megatron_main,
-        args=(distributed_init_method, distributed_world_size, config),
+        args=(distributed_init_method, distributed_world_size, config, n_testing_steps),
         nprocs=distributed_world_size
     )
 
@@ -317,4 +317,4 @@ if __name__ == "__main__":
     elif args.type == "seqpipe":
         print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices))
     elif args.type == "megatron":
-        megatron_spawn_tasks(config)
+        megatron_spawn_tasks(config, n_testing_steps=args.n_steps)

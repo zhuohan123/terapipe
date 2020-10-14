@@ -27,8 +27,8 @@ def uniform_slice_x(x, n_slices):
 
 class UCXTransformerRunner:
     def __init__(self, config, n_slices, my_address, my_port, prev_address,
-                 prev_port, rank, world_size, n_steps, check_correctness=False,
-                 checkpoint_path=None):
+                 prev_port, rank, local_rank, world_size, n_steps,
+                 check_correctness=False, checkpoint_path=None):
         self.config = config
         self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_slices = n_slices
@@ -42,6 +42,7 @@ class UCXTransformerRunner:
         self.q_in = queue.Queue()
         self.q_out = asyncio.Queue(loop=self.loop)
         self.rank = rank
+        self.local_rank = local_rank
         self.world_size = world_size
         self.n_steps = n_steps
         self.check_correctness = check_correctness
@@ -183,6 +184,7 @@ class UCXTransformerRunner:
         torch.cuda.synchronize()
 
     def calc(self):
+        torch.cuda.set_device(self.local_rank)
         try:
             for _ in range(self.n_steps):
                 start_time = time.time()
@@ -229,8 +231,8 @@ def main():
 
     runner = UCXTransformerRunner(
         config, args.n_slices, args.my_address, args.my_port, args.prev_address,
-        args.prev_port, args.rank, args.world_size, args.n_steps, check_correctness=args.check_correctness,
-        checkpoint_path=args.checkpoint_path,
+        args.prev_port, args.rank, args.local_rank, args.world_size, args.n_steps,
+        check_correctness=args.check_correctness, checkpoint_path=args.checkpoint_path,
     )
     runner.run()
 
