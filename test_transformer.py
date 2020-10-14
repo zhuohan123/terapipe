@@ -305,16 +305,16 @@ if __name__ == "__main__":
         placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
         model_name=args.model,
     )
-    if sys.argv[1] == "gridsearch":
+    if args.type == "gridsearch":
         grid_search_forward_time()
-    elif sys.argv[1] == "single":
+    elif args.type == "single":
         print("single_device (s/it):", single_device_time(config, n_testing_steps=args.n_steps))
-    elif sys.argv[1] == "correctness":
+    elif args.type == "correctness":
         assert args.checkpoint_path is not None
         check_correctness(config, args.checkpoint_path)
-    elif sys.argv[1] == "gpipe":
+    elif args.type == "gpipe":
         print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_stpes))
-    elif sys.argv[1] == "seqpipe":
+    elif args.type == "seqpipe":
         print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices))
-    elif sys.argv[1] == "megatron":
+    elif args.type == "megatron":
         megatron_spawn_tasks(config)

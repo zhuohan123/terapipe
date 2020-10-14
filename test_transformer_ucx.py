@@ -208,6 +208,7 @@ def main():
     parser.add_argument('--prev-address', metavar='IP', type=str, default=None)
     parser.add_argument('--prev-port', metavar='PORT', type=int, default=None)
     parser.add_argument('--rank', metavar='I', type=int, default=0)
+    parser.add_argument('--local-rank', metavar='I', type=int, default=0)
     parser.add_argument('--world-size', metavar='N', type=int, default=1)
     parser.add_argument('--check-correctness', action='store_true')
     parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
@@ -216,7 +217,7 @@ def main():
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     args = parser.parse_args()
-
+    torch.cuda.set_device(args.local_rank)
     config = TransformerConfig(
         batch_size=1,
         seq_len=1024,
