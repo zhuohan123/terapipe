@@ -42,7 +42,7 @@ for node_id in $(seq 0 $((N_NODES - 1))); do
           --n-slices ${N_SLICES} \
           --n-steps ${N_STEPS} \
       &
-    elif [ ${i} == $((N_NODES - 1)) ]; then
+    elif [ ${i} == $((WORLD_SIZE - 1)) ]; then
       ssh -o StrictHostKeyChecking=no ${NODE_ADDR} \
         ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
           --prev-address ${PREV_ADDR} \
