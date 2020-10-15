@@ -14,7 +14,7 @@ from transformer_models import (
     TransformerConfig, TransformerLayer,
     SingleDeviceTransformer, PipelinedTransformer,
     ModelParallelTransformerLayer, save_layers_and_inputs,
-    MODEL_CONFIGS,
+    MODEL_CONFIGS, load_layers, load_grads, load_inputs
 )
 
 
@@ -137,6 +137,31 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10):
         y, _ = single_device_transformer(x)
         loss = torch.mean(y)
         loss.backward()
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    return duration / n_testing_steps
+
+
+def single_device_correctness(config: TransformerConfig, checkpoint_path: str, n_testing_steps=10):
+    set_random_seed(2)
+    transformer_layers, x = config.create_layers_and_inputs()
+    load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
+    x = x.cuda(0)
+    x = load_inputs(checkpoint_path)
+    single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    torch.cuda.synchronize()
+    start = time.time()
+    for t in range(n_testing_steps):
+        single_device_transformer.zero_grad()
+        y, _ = single_device_transformer(x)
+        loss = torch.mean(y)
+        loss.backward()
+        all_ref_grads = load_grads(range(config.n_layers), checkpoint_path)
+        for layer, ref_grads in zip(transformer_layers, all_ref_grads):
+            for param, ref_grad in zip(layer.parameters(), ref_grads):
+                assert param.grad.size() == ref_grad.size()
+                print(torch.mean(torch.abs(param.grad - ref_grad)))
+
     torch.cuda.synchronize()
     duration = time.time() - start
     return duration / n_testing_steps
@@ -289,7 +314,7 @@ def megatron_spawn_tasks(config, n_testing_steps=10):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Different parallel methods for the Transformer')
     parser.add_argument('--type', metavar='NAME', type=str, default=None,
-                        choices=["gridsearch", "single", "correctness", "gpipe", "seqpipe", "megatron"])
+                        choices=["gridsearch", "single", "correctness", "single_correctness", "gpipe", "seqpipe", "megatron"])
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
@@ -312,6 +337,9 @@ if __name__ == "__main__":
     elif args.type == "correctness":
         assert args.checkpoint_path is not None
         check_correctness(config, args.checkpoint_path)
+    elif args.type == "single_correctness":
+        assert args.checkpoint_path is not None
+        single_device_correctness(config, args.checkpoint_path, n_testing_steps=args.n_stpes)
     elif args.type == "gpipe":
         print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_stpes))
     elif args.type == "seqpipe":
