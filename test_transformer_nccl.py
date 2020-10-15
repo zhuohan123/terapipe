@@ -15,7 +15,7 @@ import sys
 os.environ['NCCL_SOCKET_NTHREADS'] = '4'
 os.environ['NCCL_NSOCKS_PERTHREAD'] = '4'
 
-sys.path.append(os.path.join(os.path.basename(__file__), "nccl"))
+sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), "nccl"))
 import py_nccl_sendrecv
 
 
@@ -29,6 +29,9 @@ def uniform_slice_x(x, n_slices):
         start_index += seq_len_slice
     assert start_index == seq_len
     return sliced_x
+
+
+WARM_UP_ROUNDS = 5
 
 
 class NCCLTransformerRunner:
@@ -154,11 +157,18 @@ class NCCLTransformerRunner:
         torch.cuda.synchronize()
 
     def run(self):
+        all_step_times = []
         for _ in range(self.n_steps):
             start_time = time.time()
             self.step()
             step_time = time.time() - start_time
+            all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)
+        if len(all_step_times) > WARM_UP_ROUNDS:
+            print("rank", self.rank,
+                  "step_time_mean:", np.mean(all_step_times[WARM_UP_ROUNDS:]),
+                  "step_time_std:", np.std(all_step_times[WARM_UP_ROUNDS:]),
+                  flush=True)
 
 
 def main():
@@ -183,13 +193,16 @@ def main():
         model_name=args.model,
     )
 
+    # NOTE: we must save id file to a shared filesystem like AWS efs!
+    id_file = os.path.join(os.path.abspath(os.path.dirname(__file__)), "nccl_uniq_id")
+
     if args.rank == 0:
         nccl_uniq_id = py_nccl_sendrecv.get_unique_id()
-        with open("/tmp/nccl_uniq_id", "wb") as f:
+        with open(id_file, "wb") as f:
             f.write(nccl_uniq_id)
     else:
         time.sleep(3)
-        with open("/tmp/nccl_uniq_id", "rb") as f:
+        with open(id_file, "rb") as f:
             nccl_uniq_id = f.read()
 
     runner = NCCLTransformerRunner(
