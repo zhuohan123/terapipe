@@ -250,6 +250,32 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     return duration / n_testing_steps
 
 
+def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_steps=10, n_slices=8):
+    print("seqpipe_time")
+    transformer_layers, x = config.create_layers_and_inputs_on_gpu()
+    load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
+    x = load_inputs(checkpoint_path)
+    nested_layers = uniform_slice_layers(transformer_layers)
+    pipelined_transformer = PipelinedTransformer(nested_layers, config)
+    sliced_x = uniform_slice_x(x, n_slices)
+    start = time.time()
+    for t in range(n_testing_steps):
+        print("step", t)
+        pipelined_transformer.zero_grad()
+        y_pipelined = pipelined_transformer(sliced_x)
+        loss = torch.mean(torch.cat(y_pipelined, dim=0))
+        loss.backward()
+        all_ref_grads = load_grads(range(config.n_layers), checkpoint_path)
+        for layer, ref_grads in zip(transformer_layers, all_ref_grads):
+            for param, ref_grad in zip(layer.parameters(), ref_grads):
+                assert param.grad.size() == ref_grad.size()
+                print(torch.mean(torch.abs(param.grad - ref_grad.to(param.grad))))
+
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    return duration / n_testing_steps
+
+
 def megatron_main(distributed_rank, distributed_init_method, distributed_world_size,
                   config: TransformerConfig, n_testing_steps=10, profile=False):
     dist.init_process_group(
@@ -339,9 +365,9 @@ if __name__ == "__main__":
         check_correctness(config, args.checkpoint_path)
     elif args.type == "single_correctness":
         assert args.checkpoint_path is not None
-        single_device_correctness(config, args.checkpoint_path, n_testing_steps=args.n_stpes)
+        single_device_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps)
     elif args.type == "gpipe":
-        print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_stpes))
+        print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_steps))
     elif args.type == "seqpipe":
         print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices))
     elif args.type == "megatron":

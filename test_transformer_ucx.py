@@ -25,6 +25,9 @@ def uniform_slice_x(x, n_slices):
     return sliced_x
 
 
+WARM_UP_ROUNDS = 5
+
+
 class UCXTransformerRunner:
     def __init__(self, config, n_slices, my_address, my_port, prev_address,
                  prev_port, rank, local_rank, world_size, n_steps,
@@ -95,12 +98,12 @@ class UCXTransformerRunner:
 
     async def send_coroutine(self, prev_ep=None, next_ep=None):
         for _ in range(self.n_steps):
-            for _ in range(self.n_slices):
+            for i in range(self.n_slices):
                 y = await self.q_out.get()
                 if self.rank != self.world_size - 1:
                     await next_ep.send(y.detach())
 
-            for _ in reversed(range(self.n_slices)):
+            for i in reversed(range(self.n_slices)):
                 dx = await self.q_out.get()
                 if self.rank != 0:
                     await prev_ep.send(dx.detach())
@@ -177,7 +180,7 @@ class UCXTransformerRunner:
             for layer, ref_grads in zip(self.layers, all_ref_grads):
                 for param, ref_grad in zip(layer.parameters(), ref_grads):
                     assert param.grad.size() == ref_grad.size()
-                    print(torch.mean(torch.abs(param.grad - ref_grad)))
+                    print(torch.mean(torch.abs(param.grad - ref_grad.to(param.grad))))
         else:
             self.optimizer.step()
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
@@ -186,11 +189,18 @@ class UCXTransformerRunner:
     def calc(self):
         torch.cuda.set_device(self.local_rank)
         try:
+            all_step_times = []
             for _ in range(self.n_steps):
                 start_time = time.time()
                 self.step()
                 step_time = time.time() - start_time
+                all_step_times.append(step_time)
                 print("rank", self.rank, "step_time:", step_time, flush=True)
+            if len(all_step_times) > WARM_UP_ROUNDS:
+                print("rank", self.rank,
+                      "step_time_mean:", np.mean(all_step_times[WARM_UP_ROUNDS:]),
+                      "step_time_std:", np.std(all_step_times[WARM_UP_ROUNDS:]),
+                      flush=True)
         except:
             track = traceback.format_exc()
             print(f"rank = {self.rank}", track, flush=True)

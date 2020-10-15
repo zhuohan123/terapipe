@@ -10,6 +10,7 @@ NEG_INF = -1e10
 MODEL_CONFIGS = {
     # n_layers, hidden_size, sequence_length, num_attention_heads
     "test":        (24,   256,  128,   256 // 64),
+    "test-l512":   (512,  256,  128,   256 // 64),
     "test-s1024":  (48,  2048, 1024,  2048 // 64),
     "test-s2048":  (48,  2048, 2048,  2048 // 64),
     "test-h3072":  (48,  3072, 2048,  3072 // 64),
