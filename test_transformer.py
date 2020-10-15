@@ -281,6 +281,7 @@ def megatron_main(local_rank, distributed_init_method, world_size,
     local_size = torch.cuda.device_count()
     distributed_world_size = world_size * local_size
     distributed_world_rank = world_rank * local_size + local_rank
+    print("distributed_world_size", distributed_world_size, "distributed_world_rank", distributed_world_rank)
     dist.init_process_group(
         backend='nccl',
         init_method=distributed_init_method,
@@ -294,6 +295,7 @@ def megatron_main(local_rank, distributed_init_method, world_size,
     mpu.initialize_model_parallel(distributed_world_size)
     set_random_seed(0)
     mpu.model_parallel_cuda_manual_seed(0)
+    print("init_models")
     transformer_layers = [
         ModelParallelTransformerLayer(
             config.embedding_dim,
@@ -314,19 +316,25 @@ def megatron_main(local_rank, distributed_init_method, world_size,
     torch.cuda.synchronize()
     print("start testing")
     start = time.time()
+
+    all_step_times = []
     with torch.autograd.profiler.profile(enabled=profile, use_cuda=True) as prof:
         for t in range(n_testing_steps):
+            start_time = time.time()
             transformer.zero_grad()
             y, _ = transformer(x)
             loss = torch.mean(y)
             loss.backward()
-        torch.cuda.synchronize()
+            torch.cuda.synchronize()
+            step_time = time.time() - start_time
+            all_step_times.append(step_time)
+            print("step_time:", step_time, flush=True)
     if profile:
         print("writing trace to disk")
         prof.export_chrome_trace("gpipe.gtrace")
         print(prof.key_averages().table())
     duration = time.time() - start
-    print("megatron (s/it):", duration / n_testing_steps)
+    print("megatron (s/it):", np.mean(all_step_times), np.std(all_step_times))
 
 
 def megatron_spawn_tasks(world_size, world_rank, ip_address, port, config, n_testing_steps=10):

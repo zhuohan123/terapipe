@@ -24,5 +24,6 @@ if __name__ == "__main__":
 
     world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE'))
     world_rank = int(os.getenv('OMPI_COMM_WORLD_RANK'))
+    print("world_size", world_size)
 
     megatron_spawn_tasks(world_size, world_rank, args.ip_address, args.port, config, n_testing_steps=args.n_steps)
