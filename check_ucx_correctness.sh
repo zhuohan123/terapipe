@@ -5,7 +5,7 @@ if [ "$#" -gt 2 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many argum
 
 N_NODES=$1
 N_GPUS=$2 # per node
-MODEL=test
+MODEL=test-l512
 N_SLICES=8
 N_STEPS=10
 
