@@ -251,7 +251,7 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
 
 
 def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_steps=10, n_slices=8):
-    print("seqpipe_time")
+    print("seqpipe_correctness")
     transformer_layers, x = config.create_layers_and_inputs_on_gpu()
     load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
     x = load_inputs(checkpoint_path)
@@ -340,7 +340,7 @@ def megatron_spawn_tasks(config, n_testing_steps=10):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Different parallel methods for the Transformer')
     parser.add_argument('--type', metavar='NAME', type=str, default=None,
-                        choices=["gridsearch", "single", "correctness", "single_correctness", "gpipe", "seqpipe", "megatron"])
+                        choices=["gridsearch", "single", "correctness", "single_correctness", "gpipe", "seqpipe", "seqpipe_correctness", "megatron"])
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
@@ -370,5 +370,8 @@ if __name__ == "__main__":
         print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_steps))
     elif args.type == "seqpipe":
         print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices))
+    elif args.type == "seqpipe_correctness":
+        assert args.checkpoint_path is not None
+        seqpipe_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps, n_slices=args.n_slices)
     elif args.type == "megatron":
         megatron_spawn_tasks(config, n_testing_steps=args.n_steps)
