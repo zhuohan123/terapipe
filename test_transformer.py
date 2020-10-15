@@ -9,10 +9,12 @@ import torch.nn.functional as F
 import mpu
 import itertools
 import sys
+import argparse
 from transformer_models import (
     TransformerConfig, TransformerLayer,
     SingleDeviceTransformer, PipelinedTransformer,
-    ModelParallelTransformerLayer
+    ModelParallelTransformerLayer, save_layers_and_inputs,
+    MODEL_CONFIGS, load_layers, load_grads, load_inputs
 )
 
 
@@ -140,6 +142,51 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10):
     return duration / n_testing_steps
 
 
+def single_device_correctness(config: TransformerConfig, checkpoint_path: str, n_testing_steps=10):
+    set_random_seed(2)
+    transformer_layers, x = config.create_layers_and_inputs()
+    load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
+    x = x.cuda(0)
+    x = load_inputs(checkpoint_path)
+    single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    torch.cuda.synchronize()
+    start = time.time()
+    for t in range(n_testing_steps):
+        single_device_transformer.zero_grad()
+        y, _ = single_device_transformer(x)
+        loss = torch.mean(y)
+        loss.backward()
+        all_ref_grads = load_grads(range(config.n_layers), checkpoint_path)
+        for layer, ref_grads in zip(transformer_layers, all_ref_grads):
+            for param, ref_grad in zip(layer.parameters(), ref_grads):
+                assert param.grad.size() == ref_grad.size()
+                print(torch.mean(torch.abs(param.grad - ref_grad)))
+
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    return duration / n_testing_steps
+
+
+def check_correctness(config: TransformerConfig, checkpoint_path: str):
+    transformer_layers, x = config.create_layers_and_inputs()
+    transformer_layers = [layer.cuda(0) for layer in transformer_layers]
+    x = x.cuda(0)
+    single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    single_device_transformer.zero_grad()
+    y, _ = single_device_transformer(x)
+    loss = torch.mean(y)
+    loss.backward()
+    torch.cuda.synchronize()
+    grad_layers = []
+    for layer in transformer_layers:
+        grad_layer = []
+        for param in layer.parameters():
+            grad_layer.append(param.grad)
+        grad_layers.append(grad_layer)
+    save_layers_and_inputs(transformer_layers, grad_layers,
+                           range(len(transformer_layers)), x, checkpoint_path)
+
+
 def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
     print("gpipe_time")
     print("preparing layers and inputs")
@@ -203,6 +250,32 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     return duration / n_testing_steps
 
 
+def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_steps=10, n_slices=8):
+    print("seqpipe_correctness")
+    transformer_layers, x = config.create_layers_and_inputs_on_gpu()
+    load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
+    x = load_inputs(checkpoint_path)
+    nested_layers = uniform_slice_layers(transformer_layers)
+    pipelined_transformer = PipelinedTransformer(nested_layers, config)
+    sliced_x = uniform_slice_x(x, n_slices)
+    start = time.time()
+    for t in range(n_testing_steps):
+        print("step", t)
+        pipelined_transformer.zero_grad()
+        y_pipelined = pipelined_transformer(sliced_x)
+        loss = torch.mean(torch.cat(y_pipelined, dim=0))
+        loss.backward()
+        all_ref_grads = load_grads(range(config.n_layers), checkpoint_path)
+        for layer, ref_grads in zip(transformer_layers, all_ref_grads):
+            for param, ref_grad in zip(layer.parameters(), ref_grads):
+                assert param.grad.size() == ref_grad.size()
+                print(torch.mean(torch.abs(param.grad - ref_grad.to(param.grad))))
+
+    torch.cuda.synchronize()
+    duration = time.time() - start
+    return duration / n_testing_steps
+
+
 def megatron_main(distributed_rank, distributed_init_method, distributed_world_size,
                   config: TransformerConfig, n_testing_steps=10, profile=False):
     dist.init_process_group(
@@ -253,34 +326,52 @@ def megatron_main(distributed_rank, distributed_init_method, distributed_world_s
     print("megatron (s/it):", duration / n_testing_steps)
 
 
-def megatron_spawn_tasks(config):
+def megatron_spawn_tasks(config, n_testing_steps=10):
     port = random.randint(10000, 20000)
     distributed_init_method = 'tcp://localhost:{port}'.format(port=port)
     distributed_world_size = torch.cuda.device_count()
     torch.multiprocessing.spawn(
         megatron_main,
-        args=(distributed_init_method, distributed_world_size, config),
+        args=(distributed_init_method, distributed_world_size, config, n_testing_steps),
         nprocs=distributed_world_size
     )
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Different parallel methods for the Transformer')
+    parser.add_argument('--type', metavar='NAME', type=str, default=None,
+                        choices=["gridsearch", "single", "correctness", "single_correctness", "gpipe", "seqpipe", "seqpipe_correctness", "megatron"])
+    parser.add_argument('--model', metavar='NAME', type=str, default=None,
+                        choices=list(MODEL_CONFIGS.keys()))
+    parser.add_argument('--n-slices', metavar='N', type=int, default=8)
+    parser.add_argument('--n-steps', metavar='N', type=int, default=10)
+    parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
+    args = parser.parse_args()
     set_random_seed(0)
     config = TransformerConfig(
         batch_size=1,
-        seq_len=1024,
-        n_layers=72,
-        embedding_dim=2048,
+        seq_len=128,
+        n_layers=24,
+        embedding_dim=256,
         placement_orders=[0, 3, 2, 1, 5, 6, 7, 4],
+        model_name=args.model,
     )
-    assert len(sys.argv) > 1
-    if sys.argv[1] == "gridsearch":
+    if args.type == "gridsearch":
         grid_search_forward_time()
-    elif sys.argv[1] == "single":
-        print("single_device (s/it):", single_device_time(config))
-    elif sys.argv[1] == "gpipe":
-        print("gpipe (s/it):", gpipe_time(config))
-    elif sys.argv[1] == "seqpipe":
-        print("seqpipe (s/it):", seqpipe_time(config))
-    elif sys.argv[1] == "megatron":
-        megatron_spawn_tasks(config)
+    elif args.type == "single":
+        print("single_device (s/it):", single_device_time(config, n_testing_steps=args.n_steps))
+    elif args.type == "correctness":
+        assert args.checkpoint_path is not None
+        check_correctness(config, args.checkpoint_path)
+    elif args.type == "single_correctness":
+        assert args.checkpoint_path is not None
+        single_device_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps)
+    elif args.type == "gpipe":
+        print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_steps))
+    elif args.type == "seqpipe":
+        print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices))
+    elif args.type == "seqpipe_correctness":
+        assert args.checkpoint_path is not None
+        seqpipe_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps, n_slices=args.n_slices)
+    elif args.type == "megatron":
+        megatron_spawn_tasks(config, n_testing_steps=args.n_steps)
