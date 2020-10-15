@@ -15,7 +15,7 @@ import sys
 os.environ['NCCL_SOCKET_NTHREADS'] = '4'
 os.environ['NCCL_NSOCKS_PERTHREAD'] = '4'
 
-sys.path.append("pynccl")
+sys.path.append(os.path.join(os.path.basename(__file__), "nccl"))
 import py_nccl_sendrecv
 
 
