@@ -193,7 +193,7 @@ def main():
         model_name=args.model,
     )
 
-    id_file = os.path.join(os.path.basename(__file__), "nccl_uniq_id")
+    id_file = os.path.join(os.path.abspath(os.path.basename(__file__)), "nccl_uniq_id")
 
     if args.rank == 0:
         nccl_uniq_id = py_nccl_sendrecv.get_unique_id()
