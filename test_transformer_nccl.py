@@ -1,9 +1,5 @@
 #!/usr/bin/env python
 import numpy as np
-from tensor_p2p import Communicator
-import threading
-import queue
-import asyncio
 import argparse
 import traceback
 import time
@@ -11,6 +7,16 @@ import torch
 from transformer_models import (
     TransformerConfig, load_layers, load_grads, load_inputs, MODEL_CONFIGS
 )
+
+import os
+import sys
+
+# os.environ['NCCL_DEBUG'] = 'INFO'
+os.environ['NCCL_SOCKET_NTHREADS'] = '4'
+os.environ['NCCL_NSOCKS_PERTHREAD'] = '4'
+
+sys.path.append("pynccl")
+import py_nccl_sendrecv
 
 
 def uniform_slice_x(x, n_slices):
@@ -25,25 +31,15 @@ def uniform_slice_x(x, n_slices):
     return sliced_x
 
 
-WARM_UP_ROUNDS = 5
-
-
-class UCXTransformerRunner:
-    def __init__(self, config, n_slices, my_address, my_port, prev_address,
-                 prev_port, rank, local_rank, world_size, n_steps,
+class NCCLTransformerRunner:
+    def __init__(self, config, n_slices, nccl_uniq_id, world_size, rank, local_rank, n_steps,
                  check_correctness=False, checkpoint_path=None):
         self.config = config
         self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_slices = n_slices
-        self.my_address = my_address
-        self.my_port = my_port
-        self.prev_address = prev_address
-        self.prev_port = prev_port
-        self.comm = Communicator(self.ucx_main, my_address, my_port,
-                                 prev_address, prev_port)
-        self.loop = self.comm.loop
-        self.q_in = queue.Queue()
-        self.q_out = asyncio.Queue(loop=self.loop)
+        torch.cuda.set_device(local_rank)
+        self.comm = py_nccl_sendrecv.NCCL(nccl_uniq_id, world_size)
+        self.comm.init_rank(local_rank, rank)
         self.rank = rank
         self.local_rank = local_rank
         self.world_size = world_size
@@ -65,53 +61,16 @@ class UCXTransformerRunner:
         self.n_params = len(self.all_parameters)
         self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
-    async def ucx_main(self, prev_ep, next_ep):
-        assert (prev_ep is None) == (self.rank == 0)
-        assert (next_ep is None) == (self.rank == self.world_size - 1)
-        await asyncio.gather(
-            self.recv_coroutine(prev_ep, next_ep),
-            self.send_coroutine(prev_ep, next_ep)
-        )
-
-    async def recv_coroutine(self, prev_ep=None, next_ep=None):
-        for _ in range(self.n_steps):
-            if self.rank != 0:
-                x = self.config.create_inputs_empty()
-            elif self.check_correctness:
-                x = load_inputs(self.prefix)
-                print("Rank {} loaded input x".format(self.rank))
-            else:
-                x = self.config.create_inputs()
-            sliced_x = uniform_slice_x(x, self.n_slices)
-            for s in sliced_x:
-                if self.rank != 0:
-                    await prev_ep.recv(s)
-                self.q_in.put(s)
-
-            if self.rank != self.world_size - 1:
-                grad_x = self.config.create_inputs_empty()
-                sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
-                for s in reversed(sliced_grad_x):
-                    if self.rank != self.world_size - 1:
-                        await next_ep.recv(s)
-                    self.q_in.put(s)
-
-    async def send_coroutine(self, prev_ep=None, next_ep=None):
-        for _ in range(self.n_steps):
-            for i in range(self.n_slices):
-                y = await self.q_out.get()
-                if self.rank != self.world_size - 1:
-                    await next_ep.send(y.detach())
-
-            for i in reversed(range(self.n_slices)):
-                dx = await self.q_out.get()
-                if self.rank != 0:
-                    await prev_ep.send(dx.detach())
-
-    async def put_stuff_to_q_out(self, x):
-        await self.q_out.put(x)
-
     def step(self):
+        if self.rank != 0:
+            input_x = self.config.create_inputs_empty()
+        elif self.check_correctness:
+            input_x = load_inputs(self.prefix)
+            print("Rank {} loaded input x".format(self.rank))
+        else:
+            input_x = self.config.create_inputs()
+        sliced_x = uniform_slice_x(input_x, self.n_slices)
+
         # forward
         attn_caches = [None] * len(self.layers)
         all_attn_hiddens = [[]]
@@ -120,7 +79,9 @@ class UCXTransformerRunner:
         all_outputs = []
         start_time = time.time()
         for i in range(self.n_slices):
-            x = self.q_in.get()
+            x = sliced_x[i]
+            if self.rank > 0:
+                self.comm.recv_tensor(x, self.rank - 1)
             x.requires_grad_()
             all_inputs.append(x)
             new_attn_caches_detached = []
@@ -136,7 +97,8 @@ class UCXTransformerRunner:
             all_attn_hiddens.append(attn_hiddens)
             all_attn_hiddens_detached.append(attn_hiddens_detached)
             all_outputs.append(x)
-            asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(x), loop=self.loop)
+            if self.rank < self.world_size - 1:
+                self.comm.send_tensor(x, self.rank + 1)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
         # backward
@@ -152,11 +114,15 @@ class UCXTransformerRunner:
 
         a = []
         da = []
+        if self.rank < self.world_size - 1:
+            grad_x = self.config.create_inputs_empty()
+            sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
         for i in reversed(range(self.n_slices)):
             if self.rank == self.world_size - 1:
                 dy = grad_all_outputs[i]
             else:
-                dy = self.q_in.get()
+                dy = sliced_grad_x[i]
+                self.comm.recv_tensor(dy, self.rank + 1)
             y = all_outputs[i]
             x = all_inputs[i]
             outputs = [y] + a
@@ -167,7 +133,8 @@ class UCXTransformerRunner:
             dx = all_grads[self.n_params]
             da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
-            asyncio.run_coroutine_threadsafe(self.put_stuff_to_q_out(dx), loop=self.loop)
+            if self.rank > 0:
+                self.comm.send_tensor(dx, self.rank - 1)
             for grad_w, w in zip(dw, self.all_parameters):
                 if w.grad is None:
                     w.grad = grad_w.detach()
@@ -186,39 +153,17 @@ class UCXTransformerRunner:
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
 
-    def calc(self):
-        torch.cuda.set_device(self.local_rank)
-        try:
-            all_step_times = []
-            for _ in range(self.n_steps):
-                start_time = time.time()
-                self.step()
-                step_time = time.time() - start_time
-                all_step_times.append(step_time)
-                print("rank", self.rank, "step_time:", step_time, flush=True)
-            if len(all_step_times) > WARM_UP_ROUNDS:
-                print("rank", self.rank,
-                      "step_time_mean:", np.mean(all_step_times[WARM_UP_ROUNDS:]),
-                      "step_time_std:", np.std(all_step_times[WARM_UP_ROUNDS:]),
-                      flush=True)
-        except:
-            track = traceback.format_exc()
-            print(f"rank = {self.rank}", track, flush=True)
-            exit(1)
-
     def run(self):
-        t = threading.Thread(target=self.calc)
-        t.start()
-        self.comm.run()
-        t.join()
+        for _ in range(self.n_steps):
+            start_time = time.time()
+            self.step()
+            step_time = time.time() - start_time
+            print("rank", self.rank, "step_time:", step_time, flush=True)
+     
 
 
 def main():
-    parser = argparse.ArgumentParser(description='UCX based transformer')
-    parser.add_argument('--my-address', metavar='IP', type=str, default=None)
-    parser.add_argument('--my-port', metavar='PORT', type=int, default=None)
-    parser.add_argument('--prev-address', metavar='IP', type=str, default=None)
-    parser.add_argument('--prev-port', metavar='PORT', type=int, default=None)
+    parser = argparse.ArgumentParser(description='NCCL based transformer')
     parser.add_argument('--rank', metavar='I', type=int, default=0)
     parser.add_argument('--local-rank', metavar='I', type=int, default=0)
     parser.add_argument('--world-size', metavar='N', type=int, default=1)
@@ -239,9 +184,17 @@ def main():
         model_name=args.model,
     )
 
-    runner = UCXTransformerRunner(
-        config, args.n_slices, args.my_address, args.my_port, args.prev_address,
-        args.prev_port, args.rank, args.local_rank, args.world_size, args.n_steps,
+    if args.rank == 0:
+        nccl_uniq_id = py_nccl_sendrecv.get_unique_id()
+        with open("/tmp/nccl_uniq_id", "wb") as f:
+            f.write(nccl_uniq_id)
+    else:
+        time.sleep(3)
+        with open("/tmp/nccl_uniq_id", "rb") as f:
+            nccl_uniq_id = f.read()
+
+    runner = NCCLTransformerRunner(
+        config, args.n_slices, nccl_uniq_id, args.world_size, args.rank, args.local_rank, args.n_steps,
         check_correctness=args.check_correctness, checkpoint_path=args.checkpoint_path,
     )
     runner.run()
