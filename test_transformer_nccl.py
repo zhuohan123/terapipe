@@ -159,7 +159,6 @@ class NCCLTransformerRunner:
             self.step()
             step_time = time.time() - start_time
             print("rank", self.rank, "step_time:", step_time, flush=True)
-     
 
 
 def main():
