@@ -193,6 +193,7 @@ def main():
         model_name=args.model,
     )
 
+    # NOTE: we must save id file to a shared filesystem like AWS efs!
     id_file = os.path.join(os.path.abspath(os.path.dirname(__file__)), "nccl_uniq_id")
 
     if args.rank == 0:
