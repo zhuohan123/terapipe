@@ -121,6 +121,43 @@ def grid_search_forward_time():
         print(n_layers, embedding_dim, seq_len, cache_times, this_step_time)
 
 
+def grid_search_seq_length_forward_time():
+    print("grid_search_seq_length_forward_time")
+    n_layers = 24
+    embedding_dim = 1024
+    seq_len_list = range(1, 1025)
+    ffn_embedding_dim = embedding_dim * 4
+    num_attention_heads = embedding_dim // 64
+    transformer_layers = [
+        TransformerLayer(embedding_dim, ffn_embedding_dim, num_attention_heads)
+        for _ in range(n_layers)
+    ]
+    batch_size = 1
+    assert embedding_dim % 64 == 0
+    single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    time_testing_steps = 10
+    with torch.no_grad():
+        for seq_len in itertools.product(seq_len_list):
+            try:
+                x = torch.randn(seq_len, batch_size, embedding_dim).cuda(0)
+                # warm up
+                for t in range(2):
+                    single_device_transformer.zero_grad()
+                    y, _ = single_device_transformer(x)
+                torch.cuda.synchronize()
+                start = time.time()
+                for t in range(time_testing_steps):
+                    single_device_transformer.zero_grad()
+                    y, _ = single_device_transformer(x)
+                torch.cuda.synchronize()
+                duration = time.time() - start
+                this_step_time = duration / time_testing_steps
+            except:
+                this_step_time = None
+            print(seq_len, this_step_time, flush=True)
+
+
+
 def single_device_time(config: TransformerConfig, n_testing_steps=10):
     transformer_layers, x = config.create_layers_and_inputs()
     x = x.cuda(0)
@@ -350,7 +387,8 @@ def megatron_spawn_tasks(world_size, world_rank, ip_address, port, config, n_tes
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Different parallel methods for the Transformer')
     parser.add_argument('--type', metavar='NAME', type=str, default=None,
-                        choices=["gridsearch", "single", "correctness", "single_correctness", "gpipe", "seqpipe", "seqpipe_correctness", "megatron"])
+                        choices=["gridsearch", "gridseqlen", "single", "correctness", "single_correctness", "gpipe",
+                                 "seqpipe", "seqpipe_correctness", "megatron"])
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
@@ -367,6 +405,8 @@ if __name__ == "__main__":
         model_name=args.model,
     )
     if args.type == "gridsearch":
+        grid_search_forward_time()
+    elif args.type == "gridseqlen":
         grid_search_forward_time()
     elif args.type == "single":
         print("single_device (s/it):", single_device_time(config, n_testing_steps=args.n_steps))
