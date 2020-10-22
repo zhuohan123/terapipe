@@ -407,7 +407,7 @@ if __name__ == "__main__":
     if args.type == "gridsearch":
         grid_search_forward_time()
     elif args.type == "gridseqlen":
-        grid_search_forward_time()
+        grid_search_seq_length_forward_time()
     elif args.type == "single":
         print("single_device (s/it):", single_device_time(config, n_testing_steps=args.n_steps))
     elif args.type == "correctness":
