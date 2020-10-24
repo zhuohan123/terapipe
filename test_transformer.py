@@ -423,5 +423,5 @@ if __name__ == "__main__":
     elif args.type == "seqpipe_correctness":
         assert args.checkpoint_path is not None
         seqpipe_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps, n_slices=args.n_slices)
-    elif sys.argv[1] == "megatron":
+    elif args.type == "megatron":
         megatron_spawn_tasks(1, 0, 'localhost', random.randint(10000, 20000), config, n_testing_steps=args.n_steps)
