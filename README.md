@@ -114,3 +114,24 @@ With this saved checkpoint, we can test the correctness of our implementations:
    N_STEPS=10 # Number of testing steps to run
    ./check_nccl_correctness.sh $N_NODES $N_GPUS $MODEL $N_SLICES $N_STEPS
    ```
+
+## Useful scripts:
+
+Get the IPs of all the worker nodes in the cluster:
+
+```bash
+python scripts/get_worker_ips.py
+```
+
+Load `$MY_IPADDR`, `$OTHERS_IPADDR`, `$ALL_IPADDR` as environment variables:
+
+```bash
+source scripts/load_cluster_env.sh
+```
+
+Run the same command on all nodes (useful for killing processes and check states):
+
+```bash
+scripts/fornode pkill python
+scripts/fornode nvidia-smi
+```
