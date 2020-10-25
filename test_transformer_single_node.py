@@ -1,47 +1,16 @@
 #!/usr/bin/env python
 import time
-import random
-import numpy as np
 import torch
-import torch.distributed as dist
-import torch.nn as nn
-import torch.nn.functional as F
-import mpu
 import itertools
-import sys
+import traceback
 import argparse
 from transformer_models import (
     TransformerConfig, TransformerLayer,
-    SingleDeviceTransformer, PipelinedTransformer,
-    ModelParallelTransformerLayer, save_layers_and_inputs,
-    MODEL_CONFIGS, load_layers, load_grads, load_inputs
+    SingleDeviceTransformer, PipelinedTransformer, save_layers_and_inputs,
+    MODEL_CONFIGS, load_layers, load_grads, load_inputs,
+    uniform_slice_x, uniform_slice_layers,
 )
 from utils import set_random_seed
-
-
-def uniform_slice_x(x, n_slices):
-    seq_len = x.size()[0]
-    sliced_x = []
-    start_index = 0
-    for i in range(n_slices):
-        seq_len_slice = seq_len // n_slices + int(i < seq_len % n_slices)
-        sliced_x.append(x[start_index:start_index + seq_len_slice])
-        start_index += seq_len_slice
-    assert start_index == seq_len
-    return sliced_x
-
-
-def uniform_slice_layers(transformer_layers, n_devices=None):
-    n_layers = len(transformer_layers)
-    n_devices = n_devices if n_devices else torch.cuda.device_count()
-    nested_layers = []
-    layer_idx = 0
-    for i in range(n_devices):
-        n_layers_device = n_layers // n_devices + int(i < n_layers % n_devices)
-        nested_layers.append(transformer_layers[layer_idx:layer_idx + n_layers_device])
-        layer_idx += n_layers_device
-    assert layer_idx == n_layers
-    return nested_layers
 
 
 def unit_test_forward_time(
@@ -117,7 +86,7 @@ def grid_search_seq_length_forward_time():
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
     time_testing_steps = 10
     with torch.no_grad():
-        for seq_len in itertools.product(seq_len_list):
+        for seq_len in seq_len_list:
             try:
                 x = torch.randn(seq_len, batch_size, embedding_dim).cuda(0)
                 # warm up
@@ -133,6 +102,8 @@ def grid_search_seq_length_forward_time():
                 duration = time.time() - start
                 this_step_time = duration / time_testing_steps
             except:
+                track = traceback.format_exc()
+                print(track, flush=True)
                 this_step_time = None
             print(seq_len, this_step_time, flush=True)
 

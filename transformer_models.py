@@ -290,3 +290,28 @@ def load_grads(layer_ids, prefix):
 
 def load_inputs(prefix):
     return torch.load(".".join([prefix, "inputs"]))
+
+
+def uniform_slice_x(x, n_slices):
+    seq_len = x.size()[0]
+    sliced_x = []
+    start_index = 0
+    for i in range(n_slices):
+        seq_len_slice = seq_len // n_slices + int(i < seq_len % n_slices)
+        sliced_x.append(x[start_index:start_index + seq_len_slice])
+        start_index += seq_len_slice
+    assert start_index == seq_len
+    return sliced_x
+
+
+def uniform_slice_layers(transformer_layers, n_devices=None):
+    n_layers = len(transformer_layers)
+    n_devices = n_devices if n_devices else torch.cuda.device_count()
+    nested_layers = []
+    layer_idx = 0
+    for i in range(n_devices):
+        n_layers_device = n_layers // n_devices + int(i < n_layers % n_devices)
+        nested_layers.append(transformer_layers[layer_idx:layer_idx + n_layers_device])
+        layer_idx += n_layers_device
+    assert layer_idx == n_layers
+    return nested_layers
