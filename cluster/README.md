@@ -1,6 +1,6 @@
 # Cluster Management
 
-In this project, we use [Ray autoscaler](https://docs.ray.io/en/latest/cluster/launcher.html) to launch clusters. With an existing config file, you can create a cluster with:
+In this project, we use [Ray cluster launcher](https://docs.ray.io/en/latest/cluster/launcher.html) to launch clusters. With an existing config file, you can create a cluster with:
 ```bash
 ray up cluster.yaml
 ``` 
