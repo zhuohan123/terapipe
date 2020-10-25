@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import numpy as np
-from tensor_p2p import Communicator
+from ucx_tensor_p2p import Communicator
 import threading
 import queue
 import asyncio
