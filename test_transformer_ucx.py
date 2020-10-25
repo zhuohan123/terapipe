@@ -1,6 +1,5 @@
-#!/usr/bin/env python
 import numpy as np
-from tensor_p2p import Communicator
+from ucx_tensor_p2p import Communicator
 import threading
 import queue
 import asyncio
@@ -9,21 +8,8 @@ import traceback
 import time
 import torch
 from transformer_models import (
-    TransformerConfig, load_layers, load_grads, load_inputs, MODEL_CONFIGS
+    TransformerConfig, load_layers, load_grads, load_inputs, MODEL_CONFIGS, uniform_slice_x
 )
-
-
-def uniform_slice_x(x, n_slices):
-    seq_len = x.size()[0]
-    sliced_x = []
-    start_index = 0
-    for i in range(n_slices):
-        seq_len_slice = seq_len // n_slices + int(i < seq_len % n_slices)
-        sliced_x.append(x[start_index:start_index + seq_len_slice])
-        start_index += seq_len_slice
-    assert start_index == seq_len
-    return sliced_x
-
 
 WARM_UP_ROUNDS = 5
 

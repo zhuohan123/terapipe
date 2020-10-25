@@ -36,9 +36,9 @@ def benchmark(batch_size, input_dimension, hidden_size, pipeline_depth, n_module
 
 
 r = benchmark(batch_size=512,
-             input_dimension=4096,
-             hidden_size=4096,
-             pipeline_depth=8,
-             n_modules=40,
-             repeat_times=50)
+              input_dimension=4096,
+              hidden_size=4096,
+              pipeline_depth=8,
+              n_modules=40,
+              repeat_times=50)
 print(r)

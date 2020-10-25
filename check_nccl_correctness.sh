@@ -12,10 +12,10 @@ N_STEPS=$5
 PYTHON_EXEC=python
 PYTHON_SCRIPT=$(realpath -s test_transformer_nccl.py)
 ROOT_DIR=$(dirname $(realpath -s ${0}))
-source ${ROOT_DIR}/load_cluster_env.sh
+source ${ROOT_DIR}/scripts/load_cluster_env.sh
 
-# ${ROOT_DIR}/fornode fuser -k 7777/tcp
-${ROOT_DIR}/fornode pkill python
+# ${ROOT_DIR}/scripts/fornode fuser -k 7777/tcp
+${ROOT_DIR}/scripts/fornode pkill python
 
 PREV_ADDR=""
 

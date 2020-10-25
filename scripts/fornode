@@ -2,8 +2,8 @@
 
 # This script can run commands on all nodes on the cluster: ./fornode <commands>
 
-ROOT_DIR=$(dirname $(realpath -s $0))
-source $ROOT_DIR/load_cluster_env.sh
+ROOT_DIR=$(dirname $(realpath -s $0))/..
+source $ROOT_DIR/scripts/load_cluster_env.sh
 
 for node in ${ALL_IPADDR[@]}; do
   echo "=> $node"
