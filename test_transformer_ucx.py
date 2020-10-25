@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import numpy as np
 from ucx_tensor_p2p import Communicator
 import threading
