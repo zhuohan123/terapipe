@@ -9,7 +9,7 @@ MODEL=test-l512
 N_SLICES=8
 N_STEPS=10
 
-PYTHON_EXEC=/home/ubuntu/anaconda3/envs/ucx/bin/python
+PYTHON_EXEC=`which python`
 PYTHON_SCRIPT=$(realpath -s test_transformer_ucx.py)
 ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/scripts/load_cluster_env.sh
