@@ -10,7 +10,7 @@ N_STEPS=$3
 ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/scripts/load_cluster_env.sh
 all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')
-PYTHON_EXEC=/home/ubuntu/anaconda3/envs/ucx/bin/python
+PYTHON_EXEC=`which python`
 
 # ${ROOT_DIR}/scripts/fornode fuser -k 7777/tcp
 ${ROOT_DIR}/scripts/fornode pkill python
