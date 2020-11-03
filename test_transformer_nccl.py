@@ -122,12 +122,15 @@ class NCCLTransformerRunner:
             print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat(all_outputs, dim=0)
             if self.mixed_precision:
-                concated_outputs = concated_outputs.half()
+                # cast reductions to FP32
+                concated_outputs = concated_outputs.float()
             loss = torch.mean(concated_outputs)
 
             # scale up the loss at the source for FP16, then de-scale when each
             # worker performs step() or correctness checks
-            loss = loss.float() * LOSS_SCALE_FACTOR
+            if self.mixed_precision:
+                loss = loss.float() * LOSS_SCALE_FACTOR
+                loss = loss.half()
 
             grad_all_outputs = torch.autograd.grad(loss, all_outputs)
             print("rank", self.rank, "finish calculating loss", flush=True)
