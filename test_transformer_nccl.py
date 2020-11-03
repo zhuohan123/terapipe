@@ -77,7 +77,7 @@ class NCCLTransformerRunner:
         sliced_x = uniform_slice_x(input_x, self.n_slices)
 
         if self.mixed_precision:
-            sliced_x = sliced_x.half()
+            sliced_x = [x.half() for x in sliced_x]
 
         # forward
         attn_caches = [None] * len(self.layers)
