@@ -30,9 +30,17 @@ ray attach initial-cluster.yaml
 ```
 
 After you successfully ssh into the head node, there are a couple of things you need to do:
-1. Install PyTorch with 
+0. Install PyTorch with 
    ```bash
    pip install torch torchvision
+   ```
+1. Install [NVIDIA Apex](https://github.com/nvidia/apex) for FP16 Mixed Precision training. You will need to change the `CUDA_HOME` environment variable:
+   ```bash
+   echo "export CUDA_HOME=/usr/local/cuda-10.2/ >> ~/.bashrc"
+   source ~/.bashrc
+   git clone https://github.com/NVIDIA/apex
+   cd apex
+   pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
    ```
 2. [Install NCCL](../nccl/README.md). Specifically, you can upload the NCCL installation package to the head node with:
     ```bash
