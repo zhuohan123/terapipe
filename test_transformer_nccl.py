@@ -49,12 +49,12 @@ class NCCLTransformerRunner:
             self.all_parameters += list(layer.parameters())
         self.n_params = len(self.all_parameters)
 
+        self.mixed_precision = mixed_precision
         if self.mixed_precision:
             self.optimizer = optimizers.FusedSGD(self.all_parameters, lr=1e-10)
         else:
             self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
-        self.mixed_precision = mixed_precision
         if self.mixed_precision:
             self.layers, self.optimizer = amp.initialize(self.layers, self.optimizer, opt_level='O2', loss_scale=128.0)
 
