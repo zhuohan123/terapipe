@@ -8,6 +8,7 @@ from transformer_models import (
 
 import os
 import sys
+from apex import amp, optimizers
 
 # os.environ['NCCL_DEBUG'] = 'INFO'
 os.environ['NCCL_SOCKET_NTHREADS'] = '4'
@@ -21,7 +22,7 @@ WARM_UP_ROUNDS = 5
 
 class NCCLTransformerRunner:
     def __init__(self, config, n_slices, nccl_uniq_id, world_size, rank, local_rank, n_steps,
-                 check_correctness=False, checkpoint_path=None):
+                 check_correctness=False, checkpoint_path=None, mixed_precision=False):
         self.config = config
         self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_slices = n_slices
@@ -47,7 +48,15 @@ class NCCLTransformerRunner:
         for layer in self.layers:
             self.all_parameters += list(layer.parameters())
         self.n_params = len(self.all_parameters)
-        self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
+
+        if self.mixed_precision:
+            self.optimizer = optimizers.FusedSGD(self.all_parameters, lr=1e-10)
+        else:
+            self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
+
+        self.mixed_precision = mixed_precision
+        if self.mixed_precision:
+            self.layers, self.optimizer = amp.initialize(self.layers, self.optimizer, opt_level='O2', loss_scale=128.0)
 
     def step(self):
         if self.rank != 0:
@@ -97,8 +106,19 @@ class NCCLTransformerRunner:
             print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat(all_outputs, dim=0)
             loss = torch.mean(concated_outputs)
+
+            # scale up the loss at the source for FP16, then de-scale when each
+            # worker performs step() or correctness checks
+            if self.mixed_precision:
+                with amp.scale_loss(loss, self.optimizer, delay_unscale=True) as scaled_loss:
+                    loss = scaled_loss
+
             grad_all_outputs = torch.autograd.grad(loss, all_outputs)
             print("rank", self.rank, "finish calculating loss", flush=True)
+        else:
+            # for workers that aren't the last one, we need to manually tell amp
+            # that the loss is scaled
+            self.optimizer._amp_stash.params_have_scaled_gradients = True
 
         a = []
         da = []
@@ -121,6 +141,7 @@ class NCCLTransformerRunner:
             dx = all_grads[self.n_params]
             da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
+
             if self.rank > 0:
                 self.comm.send_tensor(dx, self.rank - 1)
             for grad_w, w in zip(dw, self.all_parameters):
@@ -128,6 +149,11 @@ class NCCLTransformerRunner:
                     w.grad = grad_w.detach()
                 else:
                     w.grad += grad_w
+            # descale gradients before we step or check correctness
+            if self.mixed_precision:
+                with amp.scale_loss(dw, self.optimizer) as scaled_loss:
+                    dw = dw * 1.0
+
         if self.check_correctness:
             all_ref_grads = load_grads(range(self.rank * self.n_layers,
                                              self.rank * self.n_layers + self.n_layers),
@@ -167,6 +193,7 @@ def main():
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
+    parser.add_argument('--mixed-precision', action='store_true', default=False)
     args = parser.parse_args()
     torch.cuda.set_device(args.local_rank)
     config = TransformerConfig(
@@ -193,6 +220,7 @@ def main():
     runner = NCCLTransformerRunner(
         config, args.n_slices, nccl_uniq_id, args.world_size, args.rank, args.local_rank, args.n_steps,
         check_correctness=args.check_correctness, checkpoint_path=args.checkpoint_path,
+        mixed_precision=args.mixed_precision
     )
     runner.run()
 
