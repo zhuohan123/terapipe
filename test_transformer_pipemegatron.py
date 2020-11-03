@@ -84,7 +84,7 @@ class NCCLTransformerRunner:
         start_time = time.time()
         for i in range(self.n_slices):
             x = sliced_x[i]
-            if self.pipeline_parallel_group_rank > 0:
+            if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                 self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
             dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
             x.requires_grad_()
