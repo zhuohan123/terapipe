@@ -176,7 +176,7 @@ class NCCLTransformerRunner:
         if self.mixed_precision:
             for model_param, master_param in zip(self.all_parameters, self.master_parameters):
                 if master_param.grad is None:
-                    master_param.grad = torch.Variable(master_param.data.new(*master_param.data.size()))
+                    master_param.grad = torch.autograd.Variable(master_param.data.new(*master_param.data.size()))
                 master_param.grad.data.copy_(model_param.grad.data)
 
                 # descale master weights
