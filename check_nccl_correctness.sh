@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ "$#" -lt 5 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, number of gpus per node, model name, number of slices, number of steps required"; exit -1; fi
-if [ "$#" -gt 5 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
+if [ "$#" -gt 6 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 
 N_NODES=$1
 N_GPUS=$2 # per node
@@ -42,7 +42,8 @@ for node_id in $(seq 0 $((N_NODES - 1))); do
         --n-slices ${N_SLICES} \
         --n-steps ${N_STEPS} \
         --check-correctness \
-        --checkpoint-path ${CHECKPOINT_PATH} &
+        --checkpoint-path ${CHECKPOINT_PATH} \
+        $6 & # 6th arg is --mixed-precision
     i=$((i + 1))
   done
 done
