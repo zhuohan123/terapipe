@@ -52,14 +52,17 @@ class NCCLTransformerRunner:
         self.mixed_precision = mixed_precision
 
         if self.mixed_precision:
+            for i in range(len(self.layers)):
+                self.layers[i] = self.layers[i].half()
+
+            self.all_parameters = []
+            for layer in self.layers:
+                self.all_parameters += list(layer.parameters())
+
             self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
             for p in self.master_parameters:
                 p.requires_grad = True
-            for i in range(len(self.all_parameters)):
-                self.all_parameters[i] = self.all_parameters[i].half()
 
-            for i in range(len(self.layers)):
-                self.layers[i] = self.layers[i].half()
 
         if self.mixed_precision:
             self.optimizer = optimizers.FusedSGD(self.master_parameters, lr=1e-10)
