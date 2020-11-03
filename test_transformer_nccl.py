@@ -8,7 +8,7 @@ from transformer_models import (
 
 import os
 import sys
-from apex import amp, optimizers
+from apex import optimizers
 
 # os.environ['NCCL_DEBUG'] = 'INFO'
 os.environ['NCCL_SOCKET_NTHREADS'] = '4'
@@ -18,7 +18,7 @@ sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), "nccl")
 import py_nccl_sendrecv
 
 WARM_UP_ROUNDS = 5
-
+LOSS_SCALE_FACTOR = 128.0
 
 class NCCLTransformerRunner:
     def __init__(self, config, n_slices, nccl_uniq_id, world_size, rank, local_rank, n_steps,
@@ -50,13 +50,21 @@ class NCCLTransformerRunner:
         self.n_params = len(self.all_parameters)
 
         self.mixed_precision = mixed_precision
-        if self.mixed_precision:
-            self.optimizer = optimizers.FusedSGD(self.all_parameters, lr=1e-10)
-        else:
-            self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
         if self.mixed_precision:
-            self.layers, self.optimizer = amp.initialize(self.layers, self.optimizer, opt_level='O2', loss_scale=128.0)
+            self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
+            for p in self.master_parameters:
+                p.requires_grad = True
+            for i in range(len(self.all_parameters)):
+                self.all_parameters[i] = self.all_parameters[i].half()
+
+            for i in range(len(self.layers)):
+                self.layers[i] = self.layers[i].half()
+
+        if self.mixed_precision:
+            self.optimizer = optimizers.FusedSGD(self.master_parameters, lr=1e-10)
+        else:
+            self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
     def step(self):
         if self.rank != 0:
@@ -67,6 +75,9 @@ class NCCLTransformerRunner:
         else:
             input_x = self.config.create_inputs()
         sliced_x = uniform_slice_x(input_x, self.n_slices)
+
+        if self.mixed_precision:
+            sliced_x = sliced_x.half()
 
         # forward
         attn_caches = [None] * len(self.layers)
@@ -100,31 +111,37 @@ class NCCLTransformerRunner:
 
         # backward
         start_time = time.time()
-        self.optimizer.zero_grad()
+
+        if self.mixed_precision:
+            for layer in self.layers:
+                layer.zero_grad()
+        else:
+            self.optimizer.zero_grad()
 
         if self.rank == self.world_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat(all_outputs, dim=0)
+            if self.mixed_precision:
+                concated_outputs = concated_outputs.half()
             loss = torch.mean(concated_outputs)
 
             # scale up the loss at the source for FP16, then de-scale when each
             # worker performs step() or correctness checks
-            if self.mixed_precision:
-                with amp.scale_loss(loss, self.optimizer, delay_unscale=True) as scaled_loss:
-                    loss = scaled_loss
+            loss = loss.float() * LOSS_SCALE_FACTOR
 
             grad_all_outputs = torch.autograd.grad(loss, all_outputs)
             print("rank", self.rank, "finish calculating loss", flush=True)
-        else:
-            # for workers that aren't the last one, we need to manually tell amp
-            # that the loss is scaled
-            self.optimizer._amp_stash.params_have_scaled_gradients = True
 
         a = []
         da = []
         if self.rank < self.world_size - 1:
             grad_x = self.config.create_inputs_empty()
             sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
+
+            if self.mixed_precision:
+                grad_x = grad_x.half()
+                sliced_grad_x = sliced_grad_x.half()
+
         for i in reversed(range(self.n_slices)):
             if self.rank == self.world_size - 1:
                 dy = grad_all_outputs[i]
@@ -149,10 +166,15 @@ class NCCLTransformerRunner:
                     w.grad = grad_w.detach()
                 else:
                     w.grad += grad_w
-            # descale gradients before we step or check correctness
-            if self.mixed_precision:
-                with amp.scale_loss(dw, self.optimizer) as scaled_loss:
-                    dw = dw * 1.0
+        # copy FP16 model gradients to FP32 master before comparing/optimizing
+        if self.mixed_precision:
+            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                if master_param.grad is None:
+                    master_param.grad = torch.Variable(master_param.data.new(*master_param.data.size()))
+                master_param.grad.data.copy_(model_param.grad.data)
+
+                # descale master weights
+                master_param.grad.data.mul_(1. / LOSS_SCALE_FACTOR)
 
         if self.check_correctness:
             all_ref_grads = load_grads(range(self.rank * self.n_layers,
@@ -164,6 +186,11 @@ class NCCLTransformerRunner:
                     print(torch.mean(torch.abs(param.grad - ref_grad.to(param.grad))))
         else:
             self.optimizer.step()
+        if self.mixed_precision:
+            # copy master updated FP32 parameters back to FP16
+            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                model_param.data.copy_(master_param.data)
+        
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
 
