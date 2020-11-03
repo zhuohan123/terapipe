@@ -11,7 +11,7 @@ max_workers: 0
 provider:
     type: aws
     region: us-west-2
-    availability_zone: us-west-2a,us-west-2b,us-west-2c
+    availability_zone: us-west-2a
     cache_stopped_nodes: False
 
 auth:
@@ -19,7 +19,7 @@ auth:
 
 head_node:
     InstanceType: p3.2xlarge
-    ImageId: ami-0a7d2e981e444c2ac
+    ImageId: ami-088177741c838f89a
     # Optional, place the security group ID here to access the EFS
     SecurityGroupIds:
         - sg-07289f2663469929a
@@ -28,7 +28,7 @@ head_node:
 
 worker_nodes:
     InstanceType: p3.2xlarge
-    ImageId: ami-0a7d2e981e444c2ac
+    ImageId: ami-088177741c838f89a
     # Optional, place the security group ID here to access the EFS
     SecurityGroupIds:
         - sg-07289f2663469929a
