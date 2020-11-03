@@ -2,32 +2,22 @@ import numpy as np
 import argparse
 import time
 import torch
+import nccl
 from transformer_models import (
     TransformerConfig, load_layers, load_grads, load_inputs, MODEL_CONFIGS, uniform_slice_x
 )
-
-import os
-import sys
-
-# os.environ['NCCL_DEBUG'] = 'INFO'
-os.environ['NCCL_SOCKET_NTHREADS'] = '4'
-os.environ['NCCL_NSOCKS_PERTHREAD'] = '4'
-
-sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), "nccl"))
-import py_nccl_sendrecv
 
 WARM_UP_ROUNDS = 5
 
 
 class NCCLTransformerRunner:
-    def __init__(self, config, n_slices, nccl_uniq_id, world_size, rank, local_rank, n_steps,
+    def __init__(self, config, n_slices, world_size, rank, local_rank, n_steps,
                  check_correctness=False, checkpoint_path=None):
         self.config = config
         self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_slices = n_slices
         torch.cuda.set_device(local_rank)
-        self.comm = py_nccl_sendrecv.NCCL(nccl_uniq_id, world_size)
-        self.comm.init_rank(local_rank, rank)
+        self.comm = nccl.get_nccl_communicator(local_rank, rank, world_size)
         self.rank = rank
         self.local_rank = local_rank
         self.world_size = world_size
@@ -178,20 +168,8 @@ def main():
         model_name=args.model,
     )
 
-    # NOTE: we must save id file to a shared filesystem like AWS efs!
-    id_file = os.path.join(os.path.abspath(os.path.dirname(__file__)), "nccl_uniq_id")
-
-    if args.rank == 0:
-        nccl_uniq_id = py_nccl_sendrecv.get_unique_id()
-        with open(id_file, "wb") as f:
-            f.write(nccl_uniq_id)
-    else:
-        time.sleep(3)
-        with open(id_file, "rb") as f:
-            nccl_uniq_id = f.read()
-
     runner = NCCLTransformerRunner(
-        config, args.n_slices, nccl_uniq_id, args.world_size, args.rank, args.local_rank, args.n_steps,
+        config, args.n_slices, args.world_size, args.rank, args.local_rank, args.n_steps,
         check_correctness=args.check_correctness, checkpoint_path=args.checkpoint_path,
     )
     runner.run()

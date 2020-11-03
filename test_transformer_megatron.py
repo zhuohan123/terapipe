@@ -88,7 +88,7 @@ def megatron_spawn_tasks(world_size, world_rank, ip_address, port, config, n_tes
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='List the content of a folder')
+    parser = argparse.ArgumentParser(description='Megatron-LM baseline')
     parser.add_argument('ip_address', type=str, help='the IP address of the head node')
     parser.add_argument('-p', '--port', type=int, help='the port of the head node')
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
