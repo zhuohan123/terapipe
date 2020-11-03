@@ -146,7 +146,7 @@ class NCCLTransformerRunner:
 
             if self.mixed_precision:
                 grad_x = grad_x.half()
-                sliced_grad_x = sliced_grad_x.half()
+                sliced_grad_x = [x.half() for x in sliced_grad_x]
 
         for i in reversed(range(self.n_slices)):
             if self.rank == self.world_size - 1:
