@@ -127,6 +127,11 @@ def get_model_parallel_src_rank():
     return (_RANK // _MODEL_PARALLEL_SIZE) * _MODEL_PARALLEL_SIZE
 
 
+def get_model_parallel_dst_rank():
+    assert _INITIALIZED
+    return (_RANK // _MODEL_PARALLEL_SIZE) * _MODEL_PARALLEL_SIZE + _MODEL_PARALLEL_SIZE - 1
+
+
 def get_data_parallel_world_size():
     """Return world size for the data parallel group."""
     assert _INITIALIZED
