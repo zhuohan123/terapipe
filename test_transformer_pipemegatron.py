@@ -47,7 +47,7 @@ class NCCLTransformerRunner:
             if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1
             else None)
         self.model_parallel_prev_dst_rank = (
-            self.model_parallel_src_rank + self.model_parallel_size
+            self.model_parallel_dst_rank - self.model_parallel_size
             if self.pipeline_parallel_group_rank > 0 else None)
         self.n_steps = n_steps
         self.n_layers = (config.n_layers // pipeline_parallel_size
