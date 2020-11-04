@@ -26,6 +26,3 @@ def get_nccl_communicator(device_id, rank, world_size):
     comm = NCCL(nccl_uniq_id, world_size)
     comm.init_rank(device_id, rank)
     return comm
-
-
-
