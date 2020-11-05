@@ -51,8 +51,7 @@ class NCCLTransformerRunner:
 
             self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
             for p in self.master_parameters:
-                p.requires_grad = True
-
+                p.requires_grad_()
 
         if self.mixed_precision:
             self.optimizer = optimizers.FusedSGD(self.master_parameters, lr=1e-10)
