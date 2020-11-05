@@ -133,7 +133,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
         q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose(0, 1).chunk(3, dim=-1)
-        q *= self.scaling
+        q = q * self.scaling
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu(1)
         src_len = tgt_len
         if cache is not None:
