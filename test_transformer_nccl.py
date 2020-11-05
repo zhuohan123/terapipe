@@ -183,8 +183,9 @@ class NCCLTransformerRunner:
             self.optimizer.step()
         if self.mixed_precision:
             # copy master updated FP32 parameters back to FP16
-            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
-                model_param.copy_(master_param)
+            with torch.no_grad():
+                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                    model_param.copy_(master_param)
 
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
