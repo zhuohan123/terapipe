@@ -165,11 +165,11 @@ class NCCLTransformerRunner:
         if self.mixed_precision:
             for model_param, master_param in zip(self.all_parameters, self.master_parameters):
                 if master_param.grad is None:
-                    master_param.grad = torch.autograd.Variable(master_param.data.new(*master_param.data.size()))
-                master_param.grad.data.copy_(model_param.grad.data)
+                    master_param.grad = master_param.new(*master_param.size())
+                master_param.grad.copy_(model_param.grad)
 
                 # descale master weights
-                master_param.grad.data.mul_(1. / LOSS_SCALE_FACTOR)
+                master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
 
         if self.check_correctness:
             all_ref_grads = load_grads(range(self.rank * self.n_layers,
@@ -184,7 +184,7 @@ class NCCLTransformerRunner:
         if self.mixed_precision:
             # copy master updated FP32 parameters back to FP16
             for model_param, master_param in zip(self.all_parameters, self.master_parameters):
-                model_param.data.copy_(master_param.data)
+                model_param.copy_(master_param)
 
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
