@@ -36,8 +36,8 @@ After you successfully ssh into the head node, there are a couple of things you 
    ```
 1. Install [NVIDIA Apex](https://github.com/nvidia/apex) for FP16 Mixed Precision training. You will need to change the `CUDA_HOME` environment variable:
    ```bash
-   echo "export CUDA_HOME=/usr/local/cuda-10.2/ >> ~/.bashrc"
-   source ~/.bashrc
+   # Change CUDA runtime to 10.2
+   sudo ln -sfn /usr/local/cuda-10.2 /usr/local/cuda
    git clone https://github.com/NVIDIA/apex
    cd apex
    pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
