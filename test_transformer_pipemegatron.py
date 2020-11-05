@@ -158,7 +158,10 @@ class NCCLTransformerRunner:
         da = []
         if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
             grad_x = self.config.create_inputs_empty()
+            if self.mixed_precision:
+                grad_x = grad_x.half()
             sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
+
         for i in reversed(range(self.n_slices)):
             if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
                 dy = grad_all_outputs[i]
