@@ -6,7 +6,10 @@ import threading
 import queue
 import mpu
 
-NEG_INF = -1e10
+# https://github.com/NVIDIA/apex/issues/93
+# since the purpose of mask is to set exp(val) to 0
+# a large negative value serves the same purpose here
+NEG_INF = -65504
 MODEL_CONFIGS = {
     # n_layers, hidden_size, sequence_length, num_attention_heads
     "test":        (24,   256,  128,   256 // 64),

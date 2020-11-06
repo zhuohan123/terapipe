@@ -6,13 +6,14 @@ import nccl
 from transformer_models import (
     TransformerConfig, load_layers, load_grads, load_inputs, MODEL_CONFIGS, uniform_slice_x
 )
+from apex import optimizers
 
 WARM_UP_ROUNDS = 5
-
+LOSS_SCALE_FACTOR = 128.0
 
 class NCCLTransformerRunner:
     def __init__(self, config, n_slices, world_size, rank, local_rank, n_steps,
-                 check_correctness=False, checkpoint_path=None):
+                 check_correctness=False, checkpoint_path=None, mixed_precision=False):
         self.config = config
         self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_slices = n_slices
@@ -37,7 +38,25 @@ class NCCLTransformerRunner:
         for layer in self.layers:
             self.all_parameters += list(layer.parameters())
         self.n_params = len(self.all_parameters)
-        self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
+
+        self.mixed_precision = mixed_precision
+
+        if self.mixed_precision:
+            for i in range(len(self.layers)):
+                self.layers[i] = self.layers[i].half()
+
+            self.all_parameters = []
+            for layer in self.layers:
+                self.all_parameters += list(layer.parameters())
+
+            self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
+            for p in self.master_parameters:
+                p.requires_grad_()
+
+        if self.mixed_precision:
+            self.optimizer = optimizers.FusedSGD(self.master_parameters, lr=1e-10)
+        else:
+            self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
     def step(self):
         if self.rank != 0:
@@ -48,6 +67,9 @@ class NCCLTransformerRunner:
         else:
             input_x = self.config.create_inputs()
         sliced_x = uniform_slice_x(input_x, self.n_slices)
+
+        if self.mixed_precision:
+            sliced_x = [x.half() for x in sliced_x]
 
         # forward
         attn_caches = [None] * len(self.layers)
@@ -81,12 +103,27 @@ class NCCLTransformerRunner:
 
         # backward
         start_time = time.time()
-        self.optimizer.zero_grad()
+
+        if self.mixed_precision:
+            for layer in self.layers:
+                layer.zero_grad()
+        else:
+            self.optimizer.zero_grad()
 
         if self.rank == self.world_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat(all_outputs, dim=0)
+            if self.mixed_precision:
+                # cast reductions to FP32
+                concated_outputs = concated_outputs.float()
             loss = torch.mean(concated_outputs)
+
+            # scale up the loss at the source for FP16, then de-scale when each
+            # worker performs step() or correctness checks
+            if self.mixed_precision:
+                loss = loss.float() * LOSS_SCALE_FACTOR
+                loss = loss.half()
+
             grad_all_outputs = torch.autograd.grad(loss, all_outputs)
             print("rank", self.rank, "finish calculating loss", flush=True)
 
@@ -95,6 +132,11 @@ class NCCLTransformerRunner:
         if self.rank < self.world_size - 1:
             grad_x = self.config.create_inputs_empty()
             sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
+
+            if self.mixed_precision:
+                grad_x = grad_x.half()
+                sliced_grad_x = [x.half() for x in sliced_grad_x]
+
         for i in reversed(range(self.n_slices)):
             if self.rank == self.world_size - 1:
                 dy = grad_all_outputs[i]
@@ -111,6 +153,7 @@ class NCCLTransformerRunner:
             dx = all_grads[self.n_params]
             da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
+
             if self.rank > 0:
                 self.comm.send_tensor(dx, self.rank - 1)
             for grad_w, w in zip(dw, self.all_parameters):
@@ -118,6 +161,16 @@ class NCCLTransformerRunner:
                     w.grad = grad_w.detach()
                 else:
                     w.grad += grad_w
+        # copy FP16 model gradients to FP32 master before comparing/optimizing
+        if self.mixed_precision:
+            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                if master_param.grad is None:
+                    master_param.grad = master_param.new(*master_param.size())
+                master_param.grad.copy_(model_param.grad)
+
+                # descale master weights
+                master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
+
         if self.check_correctness:
             all_ref_grads = load_grads(range(self.rank * self.n_layers,
                                              self.rank * self.n_layers + self.n_layers),
@@ -128,6 +181,12 @@ class NCCLTransformerRunner:
                     print(torch.mean(torch.abs(param.grad - ref_grad.to(param.grad))))
         else:
             self.optimizer.step()
+        if self.mixed_precision:
+            # copy master updated FP32 parameters back to FP16
+            with torch.no_grad():
+                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                    model_param.copy_(master_param)
+
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
 
@@ -157,6 +216,7 @@ def main():
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
+    parser.add_argument('--mixed-precision', action='store_true', default=False)
     args = parser.parse_args()
     torch.cuda.set_device(args.local_rank)
     config = TransformerConfig(
@@ -171,6 +231,7 @@ def main():
     runner = NCCLTransformerRunner(
         config, args.n_slices, args.world_size, args.rank, args.local_rank, args.n_steps,
         check_correctness=args.check_correctness, checkpoint_path=args.checkpoint_path,
+        mixed_precision=args.mixed_precision
     )
     runner.run()
 

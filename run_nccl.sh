@@ -1,13 +1,14 @@
 #!/bin/bash
 
-if [ "$#" -lt 5 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, number of gpus per node, model name, number of slices, number of steps required"; exit -1; fi
-if [ "$#" -gt 5 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
+if [ "$#" -lt 5 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, number of gpus per node, model name, number of slices, number of steps, [extra args] required"; exit -1; fi
+if [ "$#" -gt 6 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 
 N_NODES=$1
 N_GPUS=$2 # per node
 MODEL=$3
 N_SLICES=$4
 N_STEPS=$5
+EXTRA_ARGS=$6
 
 PYTHON_EXEC=python
 PYTHON_SCRIPT=$(realpath -s test_transformer_nccl.py)
@@ -36,7 +37,8 @@ for node_id in $(seq 0 $((N_NODES - 1))); do
         --world-size ${WORLD_SIZE} \
         --model ${MODEL} \
         --n-slices ${N_SLICES} \
-        --n-steps ${N_STEPS} &
+        --n-steps ${N_STEPS} \
+        ${EXTRA_ARGS} & # extra arg can be --mixed-precision
     i=$((i + 1))
   done
 done

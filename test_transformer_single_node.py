@@ -10,6 +10,7 @@ from transformer_models import (
     uniform_slice_x, uniform_slice_layers,
 )
 from utils import set_random_seed
+from apex import amp
 
 
 def unit_test_forward_time(
@@ -108,41 +109,57 @@ def grid_search_seq_length_forward_time():
 
 
 
-def single_device_time(config: TransformerConfig, n_testing_steps=10):
+def single_device_time(config: TransformerConfig, n_testing_steps=10, mixed_precision=False):
     transformer_layers, x = config.create_layers_and_inputs()
     x = x.cuda(0)
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    if mixed_precision:
+        single_device_transformer = amp.initialize(single_device_transformer, opt_level='O2', loss_scale=128.0)
     for t in range(2):
         single_device_transformer.zero_grad()
         y, _ = single_device_transformer(x)
         loss = torch.mean(y)
-        loss.backward()
+        if mixed_precision:
+            with amp.scale_loss(loss, []) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
     torch.cuda.synchronize()
     start = time.time()
     for t in range(n_testing_steps):
         single_device_transformer.zero_grad()
         y, _ = single_device_transformer(x)
         loss = torch.mean(y)
-        loss.backward()
+        if mixed_precision:
+            with amp.scale_loss(loss, []) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
     torch.cuda.synchronize()
     duration = time.time() - start
     return duration / n_testing_steps
 
 
-def single_device_correctness(config: TransformerConfig, checkpoint_path: str, n_testing_steps=10):
+def single_device_correctness(config: TransformerConfig, checkpoint_path: str, n_testing_steps=10, mixed_precision=False):
     set_random_seed(2)
     transformer_layers, x = config.create_layers_and_inputs()
     load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
     x = x.cuda(0)
     x = load_inputs(checkpoint_path)
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    if mixed_precision:
+        single_device_transformer = amp.initialize(single_device_transformer, opt_level='O2', loss_scale=128.0)
     torch.cuda.synchronize()
     start = time.time()
     for t in range(n_testing_steps):
         single_device_transformer.zero_grad()
         y, _ = single_device_transformer(x)
         loss = torch.mean(y)
-        loss.backward()
+        if mixed_precision:
+            with amp.scale_loss(loss, []) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
         all_ref_grads = load_grads(range(config.n_layers), checkpoint_path)
         for layer, ref_grads in zip(transformer_layers, all_ref_grads):
             for param, ref_grad in zip(layer.parameters(), ref_grads):
@@ -154,15 +171,21 @@ def single_device_correctness(config: TransformerConfig, checkpoint_path: str, n
     return duration / n_testing_steps
 
 
-def check_correctness(config: TransformerConfig, checkpoint_path: str):
+def check_correctness(config: TransformerConfig, checkpoint_path: str, mixed_precision=False):
     transformer_layers, x = config.create_layers_and_inputs()
     transformer_layers = [layer.cuda(0) for layer in transformer_layers]
     x = x.cuda(0)
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
+    if mixed_precision:
+        single_device_transformer = amp.initialize(single_device_transformer, opt_level='O2', loss_scale=128.0)
     single_device_transformer.zero_grad()
     y, _ = single_device_transformer(x)
     loss = torch.mean(y)
-    loss.backward()
+    if mixed_precision:
+        with amp.scale_loss(loss, []) as scaled_loss:
+            scaled_loss.backward()
+    else:
+        loss.backward()
     torch.cuda.synchronize()
     grad_layers = []
     for layer in transformer_layers:
@@ -174,18 +197,24 @@ def check_correctness(config: TransformerConfig, checkpoint_path: str):
                            range(len(transformer_layers)), x, checkpoint_path)
 
 
-def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
+def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False, mixed_precision=False):
     print("gpipe_time")
     print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs_on_gpu()
     nested_layers = uniform_slice_layers(transformer_layers)
     pipelined_transformer = PipelinedTransformer(nested_layers, config)
+    if mixed_precision:
+        pipelined_transformer = amp.initialize(pipelined_transformer, opt_level='O2', loss_scale=128.0)
     print("warmup rounds")
     for t in range(2):
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer([x])
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
-        loss.backward()
+        if mixed_precision:
+            with amp.scale_loss(loss, []) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
     torch.cuda.synchronize()
     print("start testing")
     start = time.time()
@@ -195,7 +224,11 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
             pipelined_transformer.zero_grad()
             y_pipelined = pipelined_transformer([x])
             loss = torch.mean(torch.cat(y_pipelined, dim=0))
-            loss.backward()
+            if mixed_precision:
+                with amp.scale_loss(loss, []) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
         torch.cuda.synchronize()
     if profile:
         print("writing trace to disk")
@@ -205,19 +238,25 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False):
     return duration / n_testing_steps
 
 
-def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, profile=False):
+def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, profile=False, mixed_precision=False):
     print("seqpipe_time")
     print("preparing layers and inputs")
     transformer_layers, x = config.create_layers_and_inputs_on_gpu()
     nested_layers = uniform_slice_layers(transformer_layers)
     pipelined_transformer = PipelinedTransformer(nested_layers, config)
+    if mixed_precision:
+        pipelined_transformer = amp.initialize(pipelined_transformer, opt_level='O2', loss_scale=128.0)
     sliced_x = uniform_slice_x(x, n_slices)
     print("warmup rounds")
     for t in range(2):
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer(sliced_x)
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
-        loss.backward()
+        if mixed_precision:
+            with amp.scale_loss(loss, []) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
     torch.cuda.synchronize()
     print("start testing")
     start = time.time()
@@ -227,7 +266,11 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
             pipelined_transformer.zero_grad()
             y_pipelined = pipelined_transformer(sliced_x)
             loss = torch.mean(torch.cat(y_pipelined, dim=0))
-            loss.backward()
+            if mixed_precision:
+                with amp.scale_loss(loss, []) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
         torch.cuda.synchronize()
     duration = time.time() - start
     if profile:
@@ -237,13 +280,15 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
     return duration / n_testing_steps
 
 
-def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_steps=10, n_slices=8):
+def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_steps=10, n_slices=8, mixed_precision=False):
     print("seqpipe_correctness")
     transformer_layers, x = config.create_layers_and_inputs_on_gpu()
     load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
     x = load_inputs(checkpoint_path)
     nested_layers = uniform_slice_layers(transformer_layers)
     pipelined_transformer = PipelinedTransformer(nested_layers, config)
+    if mixed_precision:
+        pipelined_transformer = amp.initialize(pipelined_transformer, opt_level='O2', loss_scale=128.0)
     sliced_x = uniform_slice_x(x, n_slices)
     start = time.time()
     for t in range(n_testing_steps):
@@ -251,7 +296,11 @@ def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_st
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer(sliced_x)
         loss = torch.mean(torch.cat(y_pipelined, dim=0))
-        loss.backward()
+        if mixed_precision:
+            with amp.scale_loss(loss, []) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
         all_ref_grads = load_grads(range(config.n_layers), checkpoint_path)
         for layer, ref_grads in zip(transformer_layers, all_ref_grads):
             for param, ref_grad in zip(layer.parameters(), ref_grads):
@@ -272,6 +321,7 @@ if __name__ == "__main__":
                         choices=list(MODEL_CONFIGS.keys()))
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
+    parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--checkpoint-path', metavar='PATH', type=str, default=None)
     args = parser.parse_args()
     set_random_seed(0)
@@ -288,17 +338,17 @@ if __name__ == "__main__":
     elif args.type == "gridseqlen":
         grid_search_seq_length_forward_time()
     elif args.type == "single":
-        print("single_device (s/it):", single_device_time(config, n_testing_steps=args.n_steps))
+        print("single_device (s/it):", single_device_time(config, n_testing_steps=args.n_steps, mixed_precision=args.mixed_precision))
     elif args.type == "correctness":
         assert args.checkpoint_path is not None
-        check_correctness(config, args.checkpoint_path)
+        check_correctness(config, args.checkpoint_path, mixed_precision=args.mixed_precision)
     elif args.type == "single_correctness":
         assert args.checkpoint_path is not None
-        single_device_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps)
+        single_device_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps, mixed_precision=args.mixed_precision)
     elif args.type == "gpipe":
-        print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_steps))
+        print("gpipe (s/it):", gpipe_time(config, n_testing_steps=args.n_steps, mixed_precision=args.mixed_precision))
     elif args.type == "seqpipe":
-        print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices))
+        print("seqpipe (s/it):", seqpipe_time(config, n_testing_steps=args.n_steps, n_slices=args.n_slices, mixed_precision=args.mixed_precision))
     elif args.type == "seqpipe_correctness":
         assert args.checkpoint_path is not None
-        seqpipe_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps, n_slices=args.n_slices)
+        seqpipe_correctness(config, args.checkpoint_path, n_testing_steps=args.n_steps, n_slices=args.n_slices, mixed_precision=args.mixed_precision)

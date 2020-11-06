@@ -1,5 +1,5 @@
 # A unique identifier for the head node and workers of this cluster.
-cluster_name: model_parallel_nccl_16x
+cluster_name: model_parallel_cluster
 
 # The minimum, maximum and initial number of workers nodes to launch in addition
 # to the head node. For this project, we do not need the autoscaling, so we
@@ -11,30 +11,32 @@ max_workers: 0
 provider:
     type: aws
     region: us-west-2
-    availability_zone: us-west-2a,us-west-2b,us-west-2c
+    availability_zone: us-west-2a
     cache_stopped_nodes: False
 
 auth:
     ssh_user: ubuntu
 
 head_node:
-    InstanceType: p3.16xlarge
-    ImageId: ami-05aaccd52c9e2954f # pipe-nccl-2
+    InstanceType: p3.2xlarge
+    ImageId: ami-088177741c838f89a
+    # Optional, place the security group ID here to access the EFS
     SecurityGroupIds:
-        - "sg-f55048b4"
+        - sg-07289f2663469929a
     Placement:
-        GroupName: pipe-group
+        GroupName: ray-test
 
 worker_nodes:
-    InstanceType: p3.16xlarge
-    ImageId: ami-05aaccd52c9e2954f # pipe-nccl-2
+    InstanceType: p3.2xlarge
+    ImageId: ami-088177741c838f89a
+    # Optional, place the security group ID here to access the EFS
     SecurityGroupIds:
-        - "sg-f55048b4"
+        - sg-07289f2663469929a
     Placement:
-        GroupName: pipe-group
+        GroupName: ray-test
 
 setup_commands:
-    - sudo mount -t efs fs-6dad81c6:/ efs
+    - sudo mount -t efs fs-27551f22:/ efs
     - sudo chmod 777 efs
 
 # Command to start ray on the head node. You don't need to change this.
