@@ -40,11 +40,15 @@ from .utils import VocabUtility
 
 def _initialize_affine_weight(weight, output_size, input_size,
                               per_partition_size, partition_dim, init_method,
-                              stride=1, return_master_weight=False):
+                              stride=1, initialize_locally=False,
+                              return_master_weight=False):
     """Initialize affine weight for model parallel.
 
     Build the master weight on all processes and scatter
     the relevant chunk."""
+
+    assert not (initialize_locally and return_master_weight), \
+        "Cannot return master weight if we only initialize local weight"
 
     weight.model_parallel = True
     weight.partition_dim = partition_dim
@@ -52,7 +56,7 @@ def _initialize_affine_weight(weight, output_size, input_size,
 
     # If we only use 1 process for model parallelism, bypass scatter.
     world_size = get_model_parallel_world_size()
-    if world_size == 1:
+    if world_size == 1 or initialize_locally:
         init_method(weight)
         if return_master_weight:
             return weight
@@ -209,6 +213,7 @@ class ColumnParallelLinear(torch.nn.Module):
 
     def __init__(self, input_size, output_size, bias=True, gather_output=True,
                  init_method=init.xavier_normal_, stride=1,
+                 initialize_locally=False,
                  keep_master_weight_for_test=False):
         super(ColumnParallelLinear, self).__init__()
 
@@ -240,7 +245,8 @@ class ColumnParallelLinear(torch.nn.Module):
         self.master_weight = _initialize_affine_weight(
             self.weight, self.output_size, self.input_size,
             self.output_size_per_partition, 0, init_method,
-            stride=stride, return_master_weight=keep_master_weight_for_test)
+            stride=stride, initialize_locally=initialize_locally,
+            return_master_weight=keep_master_weight_for_test)
 
     def forward(self, input_):
         # Set up backprop all-reduce.
@@ -285,6 +291,7 @@ class RowParallelLinear(torch.nn.Module):
     def __init__(self, input_size, output_size, bias=True,
                  input_is_parallel=False,
                  init_method=init.xavier_normal_, stride=1,
+                 initialize_locally=False,
                  keep_master_weight_for_test=False):
         super(RowParallelLinear, self).__init__()
 
@@ -313,7 +320,8 @@ class RowParallelLinear(torch.nn.Module):
         self.master_weight = _initialize_affine_weight(
             self.weight, self.output_size, self.input_size,
             self.input_size_per_partition, 1, init_method,
-            stride=stride, return_master_weight=keep_master_weight_for_test)
+            stride=stride, initialize_locally=initialize_locally,
+            return_master_weight=keep_master_weight_for_test)
 
     def forward(self, input_, return_reduce_time=False):
         # Set up backprop all-reduce.
