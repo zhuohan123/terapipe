@@ -33,8 +33,8 @@ auth:
 # For more documentation on available fields, see:
 # http://boto3.readthedocs.io/en/latest/reference/services/ec2.html#EC2.ServiceResource.create_instances
 head_node:
-    InstanceType: p3.2xlarge
-    ImageId: ami-0c322afdce03ef272 # Deep Learning AMI (Ubuntu) Version 35
+    InstanceType: p4d.24xlarge
+    ImageId: ami-0bc87a16c757a7f07 # Deep Learning AMI (Ubuntu) Version 36
 
     # You can provision additional disk space with a conf as follows
     BlockDeviceMappings:
@@ -50,7 +50,7 @@ head_node:
 # http://boto3.readthedocs.io/en/latest/reference/services/ec2.html#EC2.ServiceResource.create_instances
 worker_nodes:
     InstanceType: m5.large
-    ImageId: ami-0c322afdce03ef272 # Deep Learning AMI (Ubuntu) Version 35
+    ImageId: ami-0bc87a16c757a7f07 # Deep Learning AMI (Ubuntu) Version 36
 
     # You can provision additional disk space with a conf as follows
     BlockDeviceMappings:
@@ -68,6 +68,7 @@ initialization_commands: []
 # List of shell commands to run to set up nodes.
 setup_commands:
     - pip install -U ray
+    - pip install 'boto>=1.3.8'
 
 # Custom commands that will be run on the head node after common setup.
 head_setup_commands: []

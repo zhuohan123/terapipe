@@ -32,12 +32,12 @@ ray attach initial-cluster.yaml
 After you successfully ssh into the head node, there are a couple of things you need to do:
 0. Install PyTorch with 
    ```bash
-   pip install torch torchvision
+   pip install torch==1.7.0+cu110 torchvision==0.8.1+cu110 torchaudio===0.7.0 -f https://download.pytorch.org/whl/torch_stable.html
    ```
 1. Install [NVIDIA Apex](https://github.com/nvidia/apex) for FP16 Mixed Precision training. You will need to change the `CUDA_HOME` environment variable:
    ```bash
-   # Change CUDA runtime to 10.2
-   sudo ln -sfn /usr/local/cuda-10.2 /usr/local/cuda
+   # Change CUDA runtime to 11.0
+   sudo ln -sfn /usr/local/cuda-11.0 /usr/local/cuda
    git clone https://github.com/NVIDIA/apex
    cd apex
    pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./
@@ -45,7 +45,7 @@ After you successfully ssh into the head node, there are a couple of things you 
 2. [Install NCCL](../nccl/README.md). Specifically, you can upload the NCCL installation package to the head node with:
     ```bash
     ray rsync-up initial-cluster.yaml \
-    /path/to/nccl_2.7.8-1+cuda10.1_x86_64.txz \
+    /path/to/nccl_2.7.8-1+cuda11.0_x86_64.txz \
     /home/ubuntu/
     ```
 3. Create an [EFS](https://console.aws.amazon.com/efs). This is used as an NFS for all nodes in the cluster. Please add the security group ID of the node you just started (can be found on the AWS Management Console) to the EFS to make sure your node can access the EFS. After that, you need to install the [efs-utils](https://docs.aws.amazon.com/efs/latest/ug/installing-other-distro.html) to mount the EFS on the node:
