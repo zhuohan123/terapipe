@@ -214,7 +214,8 @@ class ColumnParallelLinear(torch.nn.Module):
     def __init__(self, input_size, output_size, bias=True, gather_output=True,
                  init_method=init.xavier_normal_, stride=1,
                  initialize_locally=False,
-                 keep_master_weight_for_test=False):
+                 keep_master_weight_for_test=False,
+                 device="cuda"):
         super(ColumnParallelLinear, self).__init__()
 
         # Keep input parameters
@@ -228,10 +229,10 @@ class ColumnParallelLinear(torch.nn.Module):
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result
         # we allocate the transpose.
-        self.weight = Parameter(torch.Tensor(self.output_size_per_partition,
-                                             self.input_size))
+        self.weight = Parameter(torch.empty(self.output_size_per_partition, self.input_size,
+                                            device=device, requires_grad=True))
         if bias:
-            self.bias = Parameter(torch.Tensor(self.output_size_per_partition))
+            self.bias = Parameter(torch.empty(self.output_size_per_partition, device=device, requires_grad=True))
             self.bias.model_parallel = True
             self.bias.partition_dim = 0
             self.bias.stride = stride
@@ -292,7 +293,8 @@ class RowParallelLinear(torch.nn.Module):
                  input_is_parallel=False,
                  init_method=init.xavier_normal_, stride=1,
                  initialize_locally=False,
-                 keep_master_weight_for_test=False):
+                 keep_master_weight_for_test=False,
+                 device="cuda"):
         super(RowParallelLinear, self).__init__()
 
         # Keep input parameters
@@ -306,10 +308,10 @@ class RowParallelLinear(torch.nn.Module):
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result
         # we allocate the transpose.
-        self.weight = Parameter(torch.Tensor(self.output_size,
-                                             self.input_size_per_partition))
+        self.weight = Parameter(torch.empty(self.output_size, self.input_size_per_partition,
+                                            device=device, requires_grad=True))
         if bias:
-            self.bias = Parameter(torch.Tensor(self.output_size))
+            self.bias = Parameter(torch.empty(self.output_size, device=device, requires_grad=True))
             # Always initialize bias to zero.
             with torch.no_grad():
                 self.bias.zero_()

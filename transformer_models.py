@@ -190,9 +190,9 @@ class ModelParallelMultiheadLMAttentionWithCache(MultiheadLMAttentionWithCache):
         self.embed_dim = embed_dim
 
         self.in_proj = mpu.ColumnParallelLinear(embed_dim, 3 * embed_dim, bias=bias,
-                                                gather_output=False, initialize_locally=True).to(device)
+                                                gather_output=False, initialize_locally=True, device=device)
         self.out_proj = mpu.RowParallelLinear(embed_dim, embed_dim, bias=bias,
-                                              input_is_parallel=True, initialize_locally=True).to(device)
+                                              input_is_parallel=True, initialize_locally=True, device=device)
 
         self.model_parallel_size = mpu.get_model_parallel_world_size()
 
