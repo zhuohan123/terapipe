@@ -130,7 +130,10 @@ def single_device_time(config: TransformerConfig, n_testing_steps=10, mixed_prec
     for t in range(n_testing_steps):
         single_device_transformer.zero_grad()
         y, _ = single_device_transformer(x)
-        loss = torch.mean(y)
+        criterion = nn.CrossEntropyLoss()
+        y = y.permute(1, 2, 0)
+        target = target.permute(1, 0)
+        loss = criterion(y, target)
         if mixed_precision:
             with amp.scale_loss(loss, []) as scaled_loss:
                 scaled_loss.backward()
@@ -155,7 +158,10 @@ def single_device_correctness(config: TransformerConfig, checkpoint_path: str, n
     for t in range(n_testing_steps):
         single_device_transformer.zero_grad()
         y, _ = single_device_transformer(x)
-        loss = torch.mean(y)
+        criterion = nn.CrossEntropyLoss()
+        y = y.permute(1, 2, 0)
+        target = target.permute(1, 0)
+        loss = criterion(y, target)
         if mixed_precision:
             with amp.scale_loss(loss, []) as scaled_loss:
                 scaled_loss.backward()
@@ -229,7 +235,12 @@ def gpipe_time(config: TransformerConfig, n_testing_steps=10, profile=False, mix
             print("step", t)
             pipelined_transformer.zero_grad()
             y_pipelined = pipelined_transformer([x])
-            loss = torch.mean(torch.cat(y_pipelined, dim=0))
+            y_pipelined = torch.cat(y_pipelined, dim=0)
+            criterion = nn.CrossEntropyLoss()
+            y_pipelined = y_pipelined.permute(1, 2, 0)
+            if target.size()[0] != 1:
+                target = target.permute(1, 0)
+            loss = criterion(y_pipelined, target)
             if mixed_precision:
                 with amp.scale_loss(loss, []) as scaled_loss:
                     scaled_loss.backward()
@@ -271,7 +282,12 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
             print("step", t)
             pipelined_transformer.zero_grad()
             y_pipelined = pipelined_transformer(sliced_x)
-            loss = torch.mean(torch.cat(y_pipelined, dim=0))
+            y_pipelined = torch.cat(y_pipelined, dim=0)
+            criterion = nn.CrossEntropyLoss()
+            y_pipelined = y_pipelined.permute(1, 2, 0)
+            if target.size()[0] != 1:
+                target = target.permute(1, 0)
+            loss = criterion(y_pipelined, target)
             if mixed_precision:
                 with amp.scale_loss(loss, []) as scaled_loss:
                     scaled_loss.backward()
