@@ -304,7 +304,8 @@ def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_st
         y_pipelined = torch.cat(y_pipelined, dim=0)
         criterion = nn.CrossEntropyLoss()
         y_pipelined = y_pipelined.permute(1, 2, 0)
-        target = target.permute(1, 0)
+        if target.size()[0] != 1:
+            target = target.permute(1, 0)
         loss = criterion(y_pipelined, target)
         if mixed_precision:
             with amp.scale_loss(loss, []) as scaled_loss:
