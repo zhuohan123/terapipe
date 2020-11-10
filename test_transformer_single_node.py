@@ -301,6 +301,7 @@ def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_st
         print("step", t)
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer(sliced_x)
+        y_pipelined = torch.cat(y_pipelined, dim=0)
         criterion = nn.CrossEntropyLoss()
         y_pipelined = y_pipelined.permute(1, 2, 0)
         target = target.permute(1, 0)
