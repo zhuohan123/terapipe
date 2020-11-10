@@ -1,5 +1,6 @@
 import time
 import torch
+import torch.nn as nn
 import itertools
 import traceback
 import argparse
@@ -172,7 +173,7 @@ def single_device_correctness(config: TransformerConfig, checkpoint_path: str, n
 
 
 def check_correctness(config: TransformerConfig, checkpoint_path: str, mixed_precision=False):
-    transformer_layers, x = config.create_layers_and_inputs()
+    transformer_layers, x, target = config.create_layers_and_inputs_with_embedding()
     transformer_layers = [layer.cuda(0) for layer in transformer_layers]
     x = x.cuda(0)
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
@@ -180,7 +181,9 @@ def check_correctness(config: TransformerConfig, checkpoint_path: str, mixed_pre
         single_device_transformer = amp.initialize(single_device_transformer, opt_level='O2', loss_scale=128.0)
     single_device_transformer.zero_grad()
     y, _ = single_device_transformer(x)
-    loss = torch.mean(y)
+    criterion = nn.CrossEntropyLoss()
+    loss = criterion(y, target)
+
     if mixed_precision:
         with amp.scale_loss(loss, []) as scaled_loss:
             scaled_loss.backward()

@@ -34,6 +34,8 @@ MODEL_CONFIGS = {
     "gpt3-13b":    (40,  5120, 2048,  5120 // 128),
     "gpt3-175b":   (96, 12288, 2048, 12288 // 128),
 }
+# MegatronLM vocabulary size
+EMBEDDING_VOCAB_SIZE = 51200
 
 
 class TransformerConfig:
@@ -73,6 +75,23 @@ class TransformerConfig:
         ]
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim)
         return transformer_layers, x
+
+    def create_layers_and_inputs_with_embedding(self):
+        transformer_layers, _ = self.create_layers_and_inputs()
+        embedding_layer = nn.Embedding(EMBEDDING_VOCAB_SIZE, self.embedding_dim)
+
+        tied_output_layer = nn.Linear(self.embedding_dim, EMBEDDING_VOCAB_SIZE)
+        # tie output embedding weights to input embedding weights
+        tied_output_layer.weight = torch.transpose(embedding_layer.weight)
+
+        tokens = torch.randint(0, EMBEDDING_VOCAB_SIZE, size=(self.seq_len, self.batch_size)).long()
+        zero_pad = torch.zeros(size=(1, self.batch_size)).long()
+        # offset by 1 for language models
+        inputs = torch.cat([zero_pad, tokens[1:, :]], dim=0)
+
+        model_layers = [embedding_layer] + transformer_layers + [tied_output_layer]
+
+        return model_layers, inputs, tokens
 
     def create_layers_gpu(self, device='cuda'):
         transformer_layers = [
@@ -232,8 +251,12 @@ class SingleDeviceTransformer(nn.Module):
             attn_caches = [None] * len(self.layers)
         new_attn_caches = []
         for layer, attn_cache in zip(self.layers, attn_caches):
-            x, new_attn_cache = layer(x, attn_cache)
-            new_attn_caches.append(new_attn_cache)
+            if isinstance(layer, TransformerLayer):
+                x, new_attn_cache = layer(x, attn_cache)
+                new_attn_caches.append(new_attn_cache)
+            else:
+                x = layer(x)
+                new_attn_caches.append(None)
         return x, new_attn_caches
 
 
