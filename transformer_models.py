@@ -82,7 +82,7 @@ class TransformerConfig:
 
         tied_output_layer = nn.Linear(self.embedding_dim, EMBEDDING_VOCAB_SIZE)
         # tie output embedding weights to input embedding weights
-        tied_output_layer.weight = torch.transpose(embedding_layer.weight)
+        tied_output_layer.weight = embedding_layer.weight
 
         tokens = torch.randint(0, EMBEDDING_VOCAB_SIZE, size=(self.seq_len, self.batch_size)).long()
         zero_pad = torch.zeros(size=(1, self.batch_size)).long()

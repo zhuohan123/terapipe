@@ -176,12 +176,15 @@ def check_correctness(config: TransformerConfig, checkpoint_path: str, mixed_pre
     transformer_layers, x, target = config.create_layers_and_inputs_with_embedding()
     transformer_layers = [layer.cuda(0) for layer in transformer_layers]
     x = x.cuda(0)
+    target = target.cuda(0)
     single_device_transformer = SingleDeviceTransformer(transformer_layers).cuda(0)
     if mixed_precision:
         single_device_transformer = amp.initialize(single_device_transformer, opt_level='O2', loss_scale=128.0)
     single_device_transformer.zero_grad()
     y, _ = single_device_transformer(x)
     criterion = nn.CrossEntropyLoss()
+    y = y.permute(1, 2, 0)
+    target = target.permute(1, 0)
     loss = criterion(y, target)
 
     if mixed_precision:
