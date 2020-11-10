@@ -288,7 +288,7 @@ def seqpipe_time(config: TransformerConfig, n_testing_steps=10, n_slices=8, prof
 
 def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_steps=10, n_slices=8, mixed_precision=False):
     print("seqpipe_correctness")
-    transformer_layers, x = config.create_layers_and_inputs_on_gpu()
+    transformer_layers, x, target = config.create_layers_and_inputs_with_embedding(device='gpu_placement')
     load_layers(transformer_layers, range(config.n_layers), checkpoint_path)
     x = load_inputs(checkpoint_path)
     nested_layers = uniform_slice_layers(transformer_layers)
@@ -301,7 +301,10 @@ def seqpipe_correctness(config: TransformerConfig, checkpoint_path, n_testing_st
         print("step", t)
         pipelined_transformer.zero_grad()
         y_pipelined = pipelined_transformer(sliced_x)
-        loss = torch.mean(torch.cat(y_pipelined, dim=0))
+        criterion = nn.CrossEntropyLoss()
+        y_pipelined = y_pipelined.permute(1, 2, 0)
+        target = target.permute(1, 0)
+        loss = criterion(y_pipelined, target)
         if mixed_precision:
             with amp.scale_loss(loss, []) as scaled_loss:
                 scaled_loss.backward()
