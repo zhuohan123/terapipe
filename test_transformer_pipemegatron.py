@@ -56,6 +56,7 @@ class NCCLTransformerRunner:
         self.n_steps = n_steps
         self.n_layers = (config.n_layers // pipeline_parallel_size
                          + int(rank < config.n_layers % pipeline_parallel_size))
+        self.mixed_precision = mixed_precision
         self.trainer = terapipe_trainer.GPTTrainer(
             ModelParallelTransformerLayer,
             self.n_layers,
