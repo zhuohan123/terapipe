@@ -176,6 +176,11 @@ class NCCLTransformerRunner:
         loss_cond = False
         if self.use_embedding:
             loss_cond = self.rank < int(self.use_embedding)
+            if loss_cond:
+                all_outputs_embedding = all_outputs
+                all_outputs = uniform_slice_x(self.config.create_inputs_empty(), self.n_slices)
+                for i in range(self.n_slices):
+                    self.comm.recv_tensor(all_outputs[i], self.model_parallel_prev_dst_rank)
         else:
             loss_cond = self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1
         if loss_cond:
