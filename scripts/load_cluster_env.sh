@@ -17,4 +17,4 @@ done
 
 # # This part depends on Ray runtime. It could be slightly faster.
 # OTHERS_IPADDR=($(python $(dirname $(realpath -s ${BASH_SOURCE[0]}))/get_worker_ips.py 2>/dev/null))
-# ALL_IPADDR=($MY_IPADDR ${OTHERS_IPADDR[@]})
+ALL_IPADDR=($MY_IPADDR ${OTHERS_IPADDR[@]})
