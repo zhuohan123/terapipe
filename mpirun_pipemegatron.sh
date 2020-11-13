@@ -24,14 +24,14 @@ echo ALL_IPADDR ${ALL_IPADDR[@]}
 all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')
 
 # '--oversubscribe' enables MPI to run muliple processes per node.
-mpirun --oversubscribe --mca btl_tcp_if_include ens3 --map-by ppr:$N_GPUS:node -H $all_hosts \
-    ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
-    $MY_IPADDR \
-    -p 7777 \
-    --model-parallel-size ${MODEL_PARALLEL_SIZE} \
-    --pipeline-parallel-size ${PIPELINE_PARALLEL_SIZE} \
-    --model ${MODEL} \
-    --n-slices ${N_SLICES} \
-    --n-steps ${N_STEPS} \
-    --use-mpi \
-    ${EXTRA_ARGS}
+mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
+    --map-by ppr:$N_GPUS:node --oversubscribe -H $all_hosts \
+        ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
+        $MY_IPADDR -p 7777 \
+        --model-parallel-size ${MODEL_PARALLEL_SIZE} \
+        --pipeline-parallel-size ${PIPELINE_PARALLEL_SIZE} \
+        --model ${MODEL} \
+        --n-slices ${N_SLICES} \
+        --n-steps ${N_STEPS} \
+        --use-mpi \
+        ${EXTRA_ARGS}
