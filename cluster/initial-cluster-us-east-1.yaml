@@ -68,6 +68,7 @@ initialization_commands: []
 # List of shell commands to run to set up nodes.
 setup_commands:
     - pip install -U ray
+    - pip install mpi4py
     - sudo ln -sfn /usr/local/cuda-11.0 /usr/local/cuda
     - pip install torch==1.7.0+cu110 torchvision==0.8.1+cu110 torchaudio===0.7.0 -f https://download.pytorch.org/whl/torch_stable.html
 

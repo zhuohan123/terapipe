@@ -11,11 +11,12 @@ from py_nccl_sendrecv import NCCLGroup, NCCL, get_unique_id
 
 
 def get_nccl_communicator(device_id, rank, world_size, use_mpi=False):
-    try:
-        from mpi4py import MPI
-    except ImportError:
-        print("To get NCCL communicator with MPI, please install 'mpi4py'.")
-        use_mpi=False
+    if use_mpi:
+        try:
+            from mpi4py import MPI
+        except ImportError:
+            print("To get NCCL communicator with MPI, please install 'mpi4py'.")
+            use_mpi=False
     if use_mpi:
         assert MPI.COMM_WORLD.Get_rank() == rank
         if rank == 0:
