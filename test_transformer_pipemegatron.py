@@ -5,6 +5,7 @@ import time
 from apex import optimizers
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.distributed as dist
 
 import mpu
@@ -22,8 +23,9 @@ LOSS_SCALE_FACTOR = 128.0
 class NCCLTransformerRunner:
     def __init__(self, config, n_slices, distributed_init_method, world_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank,
-                 n_steps, mixed_precision=False):
+                 n_steps, mixed_precision=False, use_embedding=False):
         self.config = config
+        self.use_embedding = use_embedding
         self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_slices = n_slices
         torch.cuda.set_device(local_rank)
@@ -34,7 +36,9 @@ class NCCLTransformerRunner:
             rank=rank,
         )
         dist.all_reduce(torch.zeros(1).cuda())
-        mpu.initialize_model_parallel(model_parallel_size, pipeline_parallel_size)
+
+        # TODO: fix the int(self.use_embedding) usage
+        mpu.initialize_model_parallel(model_parallel_size, pipeline_parallel_size, int(self.use_embedding))
         set_random_seed(0)
         mpu.model_parallel_cuda_manual_seed(0)
         self.comm = nccl.get_nccl_communicator(local_rank, rank, world_size)
@@ -43,20 +47,38 @@ class NCCLTransformerRunner:
         self.world_size = world_size
         self.model_parallel_size = model_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
+
         self.pipeline_parallel_group_rank = mpu.get_pipeline_parallel_group_rank()
         self.model_parallel_group = mpu.get_model_parallel_group()
         self.model_parallel_src_rank = mpu.get_model_parallel_src_rank()
         self.model_parallel_dst_rank = mpu.get_model_parallel_dst_rank()
-        self.model_parallel_next_src_rank = (
-            self.model_parallel_src_rank + self.model_parallel_size
-            if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1
-            else None)
-        self.model_parallel_prev_dst_rank = (
-            self.model_parallel_dst_rank - self.model_parallel_size
-            if self.pipeline_parallel_group_rank > 0 else None)
+
+        self.model_parallel_next_src_rank = None
+        if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
+            self.model_parallel_next_src_rank = self.model_parallel_src_rank + self.model_parallel_size
+        elif self.use_embedding and self.rank == self.model_parallel_dst_rank:
+            # final GPU in final group should send to embedding group
+            self.model_parallel_next_src_rank = int(self.use_embedding) - 1
+        elif self.use_embedding and self.rank == int(self.use_embedding) - 1:
+            # embedding should send to first group
+            self.model_parallel_next_src_rank = int(self.use_embedding) + 1
+
+
+        self.model_parallel_prev_dst_rank = None
+        if self.pipeline_parallel_group_rank > 0:
+            self.model_parallel_prev_dst_rank = self.model_parallel_dst_rank - self.model_parallel_size
+        elif self.use_embedding and self.rank == int(self.use_embedding):
+            # first GPU in first group sends to embedding
+            self.model_parallel_prev_dst_rank = int(self.use_embedding) - 1
+        elif self.use_embedding and self.rank == int(self.use_embedding) - 1:
+            # Edge case, softmax layer prev rank is the last GPU
+            self.model_parallel_prev_dst_rank = self.world_size - 1
+
         self.n_steps = n_steps
+
         self.n_layers = (config.n_layers // pipeline_parallel_size
-                         + int(rank < config.n_layers % pipeline_parallel_size))
+                         + int(rank - int(self.use_embedding) < config.n_layers % pipeline_parallel_size))
+        # TODO: patch embedding layer
         self.layers = [
             ModelParallelTransformerLayer(
                 config.embedding_dim,
@@ -66,6 +88,9 @@ class NCCLTransformerRunner:
             )
             for _ in range(self.n_layers)
         ]
+        if self.use_embedding and self.rank < int(self.use_embedding):
+            embedding_layer, tied_output_layer, _, _ = self.config.create_embedding_and_inputs
+            self.layers = [embedding_layer.cuda(), tied_output_layer.cuda()]
 
         self.all_parameters = []
         for layer in self.layers:
@@ -95,12 +120,12 @@ class NCCLTransformerRunner:
         if self.rank != 0:
             input_x = self.config.create_inputs_empty()
         else:
-            input_x = self.config.create_inputs()
+            _, _, input_x, target = self.config.create_embedding_and_inputs()
         sliced_x = uniform_slice_x(input_x, self.n_slices)
 
-        if self.mixed_precision:
+        if self.mixed_precision and self.rank >= int(self.use_embedding):
             sliced_x = [x.half() for x in sliced_x]
-
+        # TODO: patch forward+backward to send embedding+softmax correctly
         # forward
         attn_caches = [None] * len(self.layers)
         all_attn_hiddens = [[]]
@@ -110,7 +135,8 @@ class NCCLTransformerRunner:
         start_time = time.time()
         for i in range(self.n_slices):
             x = sliced_x[i]
-            if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
+            # right condition is always true if self.use_embedding is False
+            if self.rank == self.model_parallel_src_rank and self.rank >= int(self.use_embedding):
                 self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
             dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
             x.requires_grad_()
@@ -128,8 +154,15 @@ class NCCLTransformerRunner:
             all_attn_hiddens.append(attn_hiddens)
             all_attn_hiddens_detached.append(attn_hiddens_detached)
             all_outputs.append(x)
-            if (self.rank == self.model_parallel_dst_rank
-                    and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
+
+            send_cond = False
+            if self.use_embedding:
+                send_cond = (self.rank == self.model_parallel_dst_rank
+                    and self.pipeline_parallel_group_rank < self.pipeline_parallel_size) or self.rank == int(self.use_embedding) - 1
+            else:
+                send_cond = (self.rank == self.model_parallel_dst_rank
+                    and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1)
+            if send_cond:
                 self.comm.send_tensor(x, self.model_parallel_next_src_rank)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
@@ -140,14 +173,24 @@ class NCCLTransformerRunner:
                 layer.zero_grad()
         else:
             self.optimizer.zero_grad()
-
-        if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
+        loss_cond = False
+        if self.use_embedding:
+            loss_cond = self.rank < int(self.use_embedding)
+        else:
+            loss_cond = self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1
+        if loss_cond:
             print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat(all_outputs, dim=0)
             if self.mixed_precision:
                 # cast reductions to FP32
                 concated_outputs = concated_outputs.float()
-            loss = torch.mean(concated_outputs)
+            if self.use_embedding:
+                criterion = nn.CrossEntropyLoss()
+                concated_outputs = concated_outputs.permute(1, 2, 0)
+                target = target.permute(1, 0)
+                loss = criterion(concated_outputs, target)
+            else:
+                loss = torch.mean(concated_outputs)
 
             # scale up the loss at the source for FP16, then de-scale when each
             # worker performs step() or correctness checks
@@ -240,6 +283,7 @@ def main():
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
+    parser.add_argument('--use-embedding', action='store_true', default=True)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -255,13 +299,20 @@ def main():
         n_devices=args.world_size,
         model_name=args.model,
     )
-    assert args.world_size == args.model_parallel_size * args.pipeline_parallel_size, \
+
+    if args.use_embedding:
+        embedding_rank_size = 1
+    else:
+        embedding_rank_size = 0
+
+    assert args.world_size == args.model_parallel_size * args.pipeline_parallel_size + embedding_rank_size, \
         "Data parallel is not implemented yet"
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
     runner = NCCLTransformerRunner(
         config, args.n_slices, distributed_init_method, args.world_size,
         args.model_parallel_size, args.pipeline_parallel_size,
-        args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision
+        args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
+        use_embedding=args.use_embedding
     )
     runner.run()
 
