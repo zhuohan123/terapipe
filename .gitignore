@@ -129,3 +129,6 @@ dmypy.json
 .pyre/
 .vscode/
 nccl_uniq_id
+.DS_Store
+profiling/
+*.tar.gz
