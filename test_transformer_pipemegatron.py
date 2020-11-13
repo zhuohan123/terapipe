@@ -14,6 +14,7 @@ from utils import set_random_seed
 from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_x,
     ModelParallelTransformerLayer,
+    TransformerLayer
 )
 
 WARM_UP_ROUNDS = 5
@@ -89,7 +90,7 @@ class NCCLTransformerRunner:
             for _ in range(self.n_layers)
         ]
         if self.use_embedding and self.rank < int(self.use_embedding):
-            embedding_layer, tied_output_layer, _, _ = self.config.create_embedding_and_inputs
+            embedding_layer, tied_output_layer, _, _ = self.config.create_embedding_and_inputs()
             self.layers = [embedding_layer.cuda(), tied_output_layer.cuda()]
 
         self.all_parameters = []
@@ -119,8 +120,11 @@ class NCCLTransformerRunner:
     def step(self):
         if self.rank != 0:
             input_x = self.config.create_inputs_empty()
-        else:
+        elif self.use_embedding:
             _, _, input_x, target = self.config.create_embedding_and_inputs()
+            input_x, target = input_x.cuda(), target.cuda()
+        else:
+            input_x = self.config.create_inputs()
         sliced_x = uniform_slice_x(input_x, self.n_slices)
 
         if self.mixed_precision and self.rank >= int(self.use_embedding):
@@ -135,17 +139,26 @@ class NCCLTransformerRunner:
         start_time = time.time()
         for i in range(self.n_slices):
             x = sliced_x[i]
-            # right condition is always true if self.use_embedding is False
-            if self.rank == self.model_parallel_src_rank and self.rank >= int(self.use_embedding):
-                self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
-            dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
-            x.requires_grad_()
+            if self.rank == self.model_parallel_src_rank:
+                if (self.pipeline_parallel_group_rank > 0 and not self.use_embedding) or (self.use_embedding and self.rank >= int(self.use_embedding)):
+                    self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
+            if self.rank >= int(self.use_embedding):
+                dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
+                x.requires_grad_()
             all_inputs.append(x)
             new_attn_caches_detached = []
             attn_hiddens = []
             attn_hiddens_detached = []
-            for layer, attn_cache in zip(self.layers, attn_caches):
-                x, new_attn_cache = layer(x, attn_cache)
+
+            layers_to_use_start, layers_to_use_end = 0, len(self.layers)
+            if self.use_embedding:
+                layers_to_use_end = 1
+            for layer, attn_cache in zip(self.layers[layers_to_use_start:layers_to_use_end], attn_caches):
+                if isinstance(layer, TransformerLayer):
+                    x, new_attn_cache = layer(x, attn_cache)
+                else:
+                    x = layer(x)
+                    new_attn_cache = {}
                 attn_hiddens += [v for k, v in new_attn_cache.items()]
                 new_attn_cache_detached = {k: v.detach().requires_grad_() for k, v in new_attn_cache.items()}
                 attn_hiddens_detached += [v for k, v in new_attn_cache_detached.items()]
@@ -164,7 +177,7 @@ class NCCLTransformerRunner:
                     and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1)
             if send_cond:
                 self.comm.send_tensor(x, self.model_parallel_next_src_rank)
-        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
+        #print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
         # backward
         start_time = time.time()
@@ -181,6 +194,7 @@ class NCCLTransformerRunner:
                 all_outputs = uniform_slice_x(self.config.create_inputs_empty(), self.n_slices)
                 for i in range(self.n_slices):
                     self.comm.recv_tensor(all_outputs[i], self.model_parallel_prev_dst_rank)
+                    all_outputs[i].requires_grad_()
         else:
             loss_cond = self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1
         if loss_cond:
@@ -204,7 +218,7 @@ class NCCLTransformerRunner:
                 loss = loss.half()
             grad_all_outputs = torch.autograd.grad(loss, all_outputs)
             print("rank", self.rank, "finish calculating loss", flush=True)
-
+        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
         a = []
         da = []
         if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
@@ -288,7 +302,7 @@ def main():
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
-    parser.add_argument('--use-embedding', action='store_true', default=True)
+    parser.add_argument('--use-embedding', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.use_mpi:

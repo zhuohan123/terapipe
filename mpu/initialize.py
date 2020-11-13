@@ -29,7 +29,7 @@ _MODEL_PARALLEL_SIZE = None
 _PIPELINE_PARALLEL_SIZE = None
 
 _MODEL_PARALLEL_GROUP = None
-_MODEL_PARALLEL_GROUP_RANK = None
+_MODEL_PARALLEL_GROUP_RANK = -1
 
 _PIPELINE_PARALLEL_GROUP_RANK = None
 
@@ -37,7 +37,7 @@ _DATA_PARALLEL_GROUP = None
 _DATA_PARALLEL_GROUP_RANK = None
 
 
-def initialize_model_parallel(model_parallel_size, pipeline_parallel_size=1, embedding_parallel_size=1):
+def initialize_model_parallel(model_parallel_size, pipeline_parallel_size=1, embedding_parallel_size=0):
     """
     Initialize model parallel and pipeline parallel groups.
     :param model_parallel_size: Size of the model parallel group.
@@ -102,11 +102,12 @@ def initialize_model_parallel(model_parallel_size, pipeline_parallel_size=1, emb
     _PIPELINE_PARALLEL_GROUP_RANK = _OFFSET_RANK // model_parallel_size % pipeline_parallel_size
 
     # Build the embedding parallel group.
-    global _EMBEDDING_PARALLEL_GROUP
-    ranks = range(embedding_parallel_size)
-    group = torch.distributed.new_group(ranks)
-    if _RANK < embedding_parallel_size:
-        _EMBEDDING_PARALLEL_GROUP = group
+    if embedding_parallel_size > 0:
+        global _EMBEDDING_PARALLEL_GROUP
+        ranks = range(embedding_parallel_size)
+        group = torch.distributed.new_group(ranks)
+        if _RANK < embedding_parallel_size:
+            _EMBEDDING_PARALLEL_GROUP = group
 
 
 def model_parallel_is_initialized():
@@ -196,7 +197,7 @@ def destroy_model_parallel():
 
     _MODEL_PARALLEL_GROUP = None
     _MODEL_PARALLEL_GROUP_ID = None
-    _MODEL_PARALLEL_GROUP_RANK = None
+    _MODEL_PARALLEL_GROUP_RANK = -1
 
     _PIPELINE_PARALLEL_GROUP_ID = None
     _PIPELINE_PARALLEL_GROUP_RANK = None
