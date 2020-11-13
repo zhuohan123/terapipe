@@ -1,0 +1,88 @@
+# An unique identifier for the head node and workers of this cluster.
+cluster_name: initial-cluster
+
+# The minimum, maximum and initial number of workers nodes to launch in addition
+# to the head node. For this project, we do not need the autoscaling, so we
+# always set these numbers the same.
+min_workers: 0
+max_workers: 0
+initial_workers: 0
+
+# Cloud-provider specific configuration.
+provider:
+    type: aws
+    region: us-east-1
+    # Availability zone(s), comma-separated, that nodes may be launched in.
+    # Nodes are currently spread between zones by a round-robin approach,
+    # however this implementation detail should not be relied upon.
+    availability_zone: us-east-1f
+    # Whether to allow node reuse. If set to False, nodes will be terminated
+    # instead of stopped.
+    cache_stopped_nodes: False # We don't cache the nodes because we use efs
+
+# How Ray will authenticate with newly launched nodes.
+auth:
+    ssh_user: ubuntu
+# By default Ray creates a new private keypair, but you can also use your own.
+# If you do so, make sure to also set "KeyName" in the head and worker node
+# configurations below.
+#    ssh_private_key: /path/to/your/key.pem
+
+# Provider-specific config for the head node, e.g. instance type. By default
+# Ray will auto-configure unspecified fields such as SubnetId and KeyName.
+# For more documentation on available fields, see:
+# http://boto3.readthedocs.io/en/latest/reference/services/ec2.html#EC2.ServiceResource.create_instances
+head_node:
+    InstanceType: p3.2xlarge
+    ImageId: ami-063585f0e06d22308 # Deep Learning AMI (Ubuntu) Version 36
+
+    # You can provision additional disk space with a conf as follows
+    BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+              VolumeSize: 200
+
+    # Additional options in the boto docs.
+
+# Provider-specific config for worker nodes, e.g. instance type. By default
+# Ray will auto-configure unspecified fields such as SubnetId and KeyName.
+# For more documentation on available fields, see:
+# http://boto3.readthedocs.io/en/latest/reference/services/ec2.html#EC2.ServiceResource.create_instances
+worker_nodes:
+    InstanceType: m5.large
+    ImageId: ami-063585f0e06d22308 # Deep Learning AMI (Ubuntu) Version 36
+
+    # You can provision additional disk space with a conf as follows
+    BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+              VolumeSize: 200
+
+    # Additional options in the boto docs.
+
+# List of commands that will be run before `setup_commands`. If docker is
+# enabled, these commands will run outside the container and before docker
+# is setup.
+initialization_commands: []
+
+# List of shell commands to run to set up nodes.
+setup_commands:
+    - pip install -U ray
+    - sudo ln -sfn /usr/local/cuda-11.0 /usr/local/cuda
+    - pip install torch==1.7.0+cu110 torchvision==0.8.1+cu110 torchaudio===0.7.0 -f https://download.pytorch.org/whl/torch_stable.html
+
+# Custom commands that will be run on the head node after common setup.
+head_setup_commands: []
+
+# Custom commands that will be run on worker nodes after common setup.
+worker_setup_commands: []
+
+# Command to start ray on the head node. You don't need to change this.
+head_start_ray_commands:
+    - ray stop
+    - ulimit -n 65536; ray start --head --port=6379 --object-manager-port=8076 --autoscaling-config=~/ray_bootstrap_config.yaml
+
+# Command to start ray on worker nodes. You don't need to change this.
+worker_start_ray_commands:
+    - ray stop
+    - ulimit -n 65536; ray start --address=$RAY_HEAD_IP:6379 --object-manager-port=8076

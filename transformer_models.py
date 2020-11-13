@@ -33,6 +33,9 @@ MODEL_CONFIGS = {
     "gpt3-6b":     (32,  4096, 2048,  4096 // 128),
     "gpt3-13b":    (40,  5120, 2048,  5120 // 128),
     "gpt3-175b":   (96, 12288, 2048, 12288 // 128),
+    # This is the model that Megatron-LM can run on
+    # 48*8 NVIDIA-V100(16 GB) GPUs without OOM.
+    "gpt3-175b-megatron":   (48, 12288//2, 2048, 384),
 }
 # MegatronLM vocabulary size
 EMBEDDING_VOCAB_SIZE = 51200

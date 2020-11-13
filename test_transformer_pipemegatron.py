@@ -1,8 +1,12 @@
-import numpy as np
 import argparse
+import os
 import time
+
+from apex import optimizers
+import numpy as np
 import torch
 import torch.distributed as dist
+
 import mpu
 import nccl
 from utils import set_random_seed
@@ -10,7 +14,6 @@ from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_x,
     ModelParallelTransformerLayer,
 )
-from apex import optimizers
 
 WARM_UP_ROUNDS = 5
 LOSS_SCALE_FACTOR = 128.0
@@ -236,7 +239,14 @@ def main():
     parser.add_argument('--n-slices', metavar='N', type=int, default=8)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
+    parser.add_argument('--use-mpi', action='store_true', default=False)
+
     args = parser.parse_args()
+    if args.use_mpi:
+        args.world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE'))
+        args.rank = int(os.getenv('OMPI_COMM_WORLD_RANK'))
+        args.local_rank = int(os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'))
+
     config = TransformerConfig(
         batch_size=1,
         seq_len=1024,
