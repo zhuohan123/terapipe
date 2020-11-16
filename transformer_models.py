@@ -45,8 +45,8 @@ MODEL_CONFIGS = {
     "gpt3-2b-single-device":     (3,  2560, 2048, 2560 // 80),
     "gpt3-6b-single-device":     (2,  4096, 2048, 4096 // 128),
     "gpt3-13b-single-device":    (1,  5120, 2048, 5120 // 128),
-    
-    "gpt3-175b-single-node":   (48, 12288//2, 2048, 384),
+    # this is for single node
+    "gpt3-175b-single-node":   (2, 12288, 2048, 12288 // 128),
 }
 
 
