@@ -249,7 +249,7 @@ class NCCLTransformerRunner:
                 dy = grad_all_outputs[i]
             else:
                 dy = sliced_grad_x[i]
-                if self.rank == self.model_parallel_dst_rank or self.rank == int(self.use_embedding) - 1:
+                if self.rank == self.model_parallel_dst_rank or (self.rank == int(self.use_embedding) - 1 and self.use_embedding):
                     if self.rank == int(self.use_embedding) - 1 and self.use_embedding:
                         self.comm.recv_tensor(dy, int(self.use_embedding))
                     elif self.rank == self.model_parallel_dst_rank:
