@@ -196,7 +196,7 @@ class NCCLTransformerRunner:
                     self.comm.recv_tensor(all_outputs[i], self.model_parallel_prev_dst_rank)
                     all_outputs[i].requires_grad_()
         else:
-            loss_cond = self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1
+            loss_cond = self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1 and self.rank == self.model_parallel_dst_rank
         if loss_cond:
             print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat(all_outputs, dim=0)
@@ -217,6 +217,11 @@ class NCCLTransformerRunner:
                 loss = loss.float() * LOSS_SCALE_FACTOR
                 loss = loss.half()
             grad_all_outputs = torch.autograd.grad(loss, all_outputs)
+
+            if self.use_embedding and self.rank < int(self.use_embedding):
+                for i in range(len(grad_all_outputs)):
+                    print(grad_all_outputs[i].size(), flush=True)
+                    self.comm.send_tensor(grad_all_outputs[i], self.world_size - 1)
             print("rank", self.rank, "finish calculating loss", flush=True)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
         a = []
@@ -226,6 +231,10 @@ class NCCLTransformerRunner:
             if self.mixed_precision:
                 grad_x = grad_x.half()
             sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
+        elif self.use_embedding and self.model_parallel_dst_rank == self.rank:
+            grad_all_outputs = []
+            for i in range(self.n_slices):
+                self.comm.recv_tensor(grad_all_outputs[i], int(self.use_embedding) - 1)
 
         for i in reversed(range(self.n_slices)):
             if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
