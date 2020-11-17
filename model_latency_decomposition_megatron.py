@@ -6,13 +6,13 @@ from apex import optimizers
 import numpy as np
 import torch
 import torch.distributed as dist
+from mpi4py import MPI
 
 import mpu
 import nccl
 from utils import set_random_seed
 from transformer_models import (
-    TransformerConfig, MODEL_CONFIGS, uniform_slice_x,
-    ModelParallelTransformerLayer,
+    TransformerConfig, MODEL_CONFIGS, ModelParallelTransformerLayer,
 )
 
 WARM_UP_ROUNDS = 5
@@ -90,12 +90,13 @@ class NCCLTransformerRunner:
         else:
             self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
-    def step(self):
+    def step(self, seqlen):
         x = self.config.create_inputs()
 
         if self.mixed_precision:
             x = x.half()
 
+        x = x[:seqlen]
         # forward
         attn_caches = [None] * len(self.layers)
         start_time = time.time()
@@ -113,7 +114,9 @@ class NCCLTransformerRunner:
             new_attn_caches_detached.append(new_attn_cache_detached)
         attn_caches = new_attn_caches_detached
         y = x
-        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
+        py_forward_time = time.time() - start_time
+        torch.cuda.synchronize()
+        forward_time = time.time() - start_time
 
         # backward
         start_time = time.time()
@@ -123,7 +126,7 @@ class NCCLTransformerRunner:
         else:
             self.optimizer.zero_grad()
 
-        print("rank", self.rank, "calculate loss", flush=True)
+        # print("rank", self.rank, "calculate loss", flush=True)
         if self.mixed_precision:
             # cast reductions to FP32
             y = y.float()
@@ -135,19 +138,21 @@ class NCCLTransformerRunner:
             loss = loss.float() * LOSS_SCALE_FACTOR
             loss = loss.half()
         dy = torch.autograd.grad(loss, y)
-        print("rank", self.rank, "finish calculating loss", flush=True)
 
         a = []
         da = []
 
         outputs = [y] + a
-        grad_outputs = [dy] + da
+        grad_outputs = [dy[0]] + da
         inputs = self.all_parameters + [x] + attn_hiddens_detached
-        all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
+        all_grads = torch.autograd.grad(outputs, inputs, grad_outputs, allow_unused=True)
         dw = all_grads[:self.n_params]
         dx = all_grads[self.n_params]
         # 'dx' is to be sent out
+        torch.cuda.synchronize()
+        backward_time = time.time() - start_time
 
+        start_time = time.time()
         da = list(all_grads[self.n_params + 1:])
         a = attn_hiddens
         for grad_w, w in zip(dw, self.all_parameters):
@@ -173,22 +178,30 @@ class NCCLTransformerRunner:
                 for model_param, master_param in zip(self.all_parameters, self.master_parameters):
                     model_param.copy_(master_param)
 
-        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
+        update_time = time.time() - start_time
+        return py_forward_time, forward_time, backward_time, update_time
 
-    def run(self):
-        all_step_times = []
+    def run(self, seqlen):
+        py_forward_durations = []
+        forward_durations = []
+        backward_durations = []
+        update_durations = []
         for _ in range(self.n_steps):
-            start_time = time.time()
-            self.step()
-            step_time = time.time() - start_time
-            all_step_times.append(step_time)
-            print("rank", self.rank, "step_time:", step_time, flush=True)
-        if len(all_step_times) > WARM_UP_ROUNDS:
-            print("rank", self.rank,
-                  "step_time_mean:", np.mean(all_step_times[WARM_UP_ROUNDS:]),
-                  "step_time_std:", np.std(all_step_times[WARM_UP_ROUNDS:]),
-                  flush=True)
+            MPI.COMM_WORLD.Barrier()
+            py_forward_time, forward_time, backward_time, update_time = self.step(seqlen)
+            py_forward_durations.append(py_forward_time)
+            forward_durations.append(forward_time)
+            backward_durations.append(backward_time)
+            update_durations.append(update_time)
+        py_forward_durations = py_forward_durations[WARM_UP_ROUNDS:]
+        forward_durations = forward_durations[WARM_UP_ROUNDS:]
+        backward_durations = backward_durations[WARM_UP_ROUNDS:]
+        update_durations = update_durations[WARM_UP_ROUNDS:]
+        if self.rank == 0:
+            print(f"seqlen {seqlen:5}, {np.mean(py_forward_durations):8.6f} {np.mean(forward_durations):8.6f}, "
+                  f"{np.mean(backward_durations):8.6f}, {np.mean(update_durations):8.6f}",
+                   flush=True)
 
 
 def main():
@@ -222,7 +235,8 @@ def main():
         args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi
     )
-    runner.run()
+    for seqlen in [1, 2, 4, 8, 12, 16, 24, 32, 64] + list(range(128, 2049, 128)):
+        runner.run(seqlen)
 
 
 if __name__ == "__main__":
