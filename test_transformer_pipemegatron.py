@@ -265,10 +265,10 @@ class NCCLTransformerRunner:
                     if self.rank != int(self.use_embedding) - 1:
                         print("rank", self.rank, "broadcast", flush=True)
                         dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
-            if self.rank == int(self.use_embedding) - 1:
+            if self.rank == int(self.use_embedding) - 1 and self.use_embedding:
                 print("embedding rank", flush=True)
-                print(all_outputs[i], flush=True)
-                all_outputs[i].backward()
+                print(all_outputs_embedding[i], flush=True)
+                all_outputs_embedding[i].backward()
                 continue
             else:
                 print("non embedding rank", flush=True)
