@@ -68,6 +68,7 @@ initialization_commands: []
 # List of shell commands to run to set up nodes.
 setup_commands:
     - pip install -U ray
+    - pip install mpi4py
 
 # Custom commands that will be run on the head node after common setup.
 head_setup_commands: []

@@ -24,7 +24,7 @@ LOSS_SCALE_FACTOR = 128.0
 class NCCLTransformerRunner:
     def __init__(self, config, n_slices, distributed_init_method, world_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank,
-                 n_steps, mixed_precision=False, use_embedding=False):
+                 n_steps, mixed_precision=False, use_embedding=False, use_mpi=False):
         self.config = config
         self.use_embedding = use_embedding
         self.n_layers = self.config.n_layers // self.config.n_devices
@@ -42,7 +42,7 @@ class NCCLTransformerRunner:
         mpu.initialize_model_parallel(model_parallel_size, pipeline_parallel_size, int(self.use_embedding))
         set_random_seed(0)
         mpu.model_parallel_cuda_manual_seed(0)
-        self.comm = nccl.get_nccl_communicator(local_rank, rank, world_size)
+        self.comm = nccl.get_nccl_communicator(local_rank, rank, world_size, use_mpi)
         self.rank = rank
         self.local_rank = local_rank
         self.world_size = world_size
@@ -331,7 +331,8 @@ def main():
         config, args.n_slices, distributed_init_method, args.world_size,
         args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
-        use_embedding=args.use_embedding
+        use_embedding=args.use_embedding,
+        use_mpi=args.use_mpi
     )
     runner.run()
 
