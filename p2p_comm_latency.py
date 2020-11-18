@@ -65,7 +65,7 @@ def benchmark(payload_size, comm, nccl_comm, rank):
 
 
 if __name__ == "__main__":
-    payload_size = int(sys.argv[1])
+    payload_sizes = [1] + list(range(12288, 12288, 12288 * 2 * 2048 + 1))
 
     comm = MPI.COMM_WORLD
     world_size = comm.Get_size()
@@ -74,10 +74,6 @@ if __name__ == "__main__":
 
     torch.cuda.set_device(local_rank)
     nccl_comm = nccl.get_nccl_communicator(local_rank, rank, world_size)
-    benchmark(payload_size, comm, nccl_comm, rank)
-
-
-
-
-
-    
+    for payload_size in payload_sizes:
+        print(f"\nPayload size = {payload_size}\n")
+        benchmark(payload_size, comm, nccl_comm, rank)
