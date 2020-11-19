@@ -116,6 +116,7 @@ class NCCLTransformerRunner:
         sliced_x_embedding_outputs = []
 
         # TODO: implement multi-GPU embedding group
+        start_time = time.time()
 
         # compute embedding layer and send embedding output to first pipeline group
         for i in range(self.n_slices):
@@ -133,6 +134,9 @@ class NCCLTransformerRunner:
             final_outputs[i].requires_grad = True
 
             final_embedding_outputs[i] = self.layers[1](final_outputs[i])
+
+        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
+        start_time = time.time()
         # compute loss
         # TODO: pipeline this computation
         grad_all_outputs = self.compute_loss(final_embedding_outputs, target)
@@ -187,6 +191,8 @@ class NCCLTransformerRunner:
             with torch.no_grad():
                 for model_param, master_param in zip(self.all_parameters, self.master_parameters):
                     model_param.copy_(master_param)
+
+        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
 
 
 
