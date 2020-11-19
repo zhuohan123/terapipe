@@ -65,7 +65,6 @@ class NCCLTransformerRunner:
 
         self.n_layers = (config.n_layers // pipeline_parallel_size
                          + int(rank - int(self.use_embedding) < config.n_layers % pipeline_parallel_size))
-        # TODO: patch embedding layer
         self.layers = [
             ModelParallelTransformerLayer(
                 config.embedding_dim,
@@ -247,7 +246,6 @@ class NCCLTransformerRunner:
 
         if self.mixed_precision:
             sliced_x = [x.half() for x in sliced_x]
-        # TODO: patch forward+backward to send embedding+softmax correctly
         # forward
         attn_caches = [None] * len(self.layers)
         all_attn_hiddens = [[]]
@@ -293,7 +291,6 @@ class NCCLTransformerRunner:
         else:
             self.optimizer.zero_grad()
 
-        # TODO: fix parameters
         grad_all_outputs = self.compute_loss(all_outputs)
 
         a = []
