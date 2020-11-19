@@ -2,6 +2,7 @@ import argparse
 import os
 import time
 import sys
+import gc
 
 from apex import optimizers
 import numpy as np
@@ -77,6 +78,9 @@ class NCCLTransformerRunner:
         if self.use_embedding and self.rank < int(self.use_embedding):
             embedding_layer, tied_output_layer, _, _ = self.config.create_embedding_and_inputs()
             self.layers = [embedding_layer.cuda(), tied_output_layer.cuda()]
+
+        # ensure layers are destroyed from GPU memory if this is an embedding node
+        gc.collect()
 
         self.all_parameters = []
         for layer in self.layers:
