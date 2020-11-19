@@ -120,7 +120,6 @@ class NCCLTransformerRunner:
         # compute embedding layer and send embedding output to first pipeline group
         for i in range(self.n_slices):
             embedding_output = self.layers[0](sliced_x_embedding[i])
-            print("rank", self.rank, "send to", self.model_parallel_next_src_rank, "sliced_x_embedding", flush=True)
             self.comm.send_tensor(embedding_output, self.model_parallel_next_src_rank)
 
             sliced_x_embedding_outputs.append(embedding_output)
@@ -130,7 +129,6 @@ class NCCLTransformerRunner:
 
         # receive final layer output from last pipeline group and compute softmax
         for i in range(self.n_slices):
-            print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "x", flush=True)
             self.comm.recv_tensor(final_outputs[i], self.model_parallel_prev_dst_rank)
             final_outputs[i].requires_grad = True
 
@@ -155,7 +153,6 @@ class NCCLTransformerRunner:
             dw = all_grads[:self.n_params]
             dx = all_grads[self.n_params]
 
-            print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "dx", flush=True)
             self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
 
             embedding_dy_shape = dx.size()
@@ -169,7 +166,6 @@ class NCCLTransformerRunner:
         # first embedding layer backwards pass
         embedding_dy = [torch.zeros(embedding_dy_shape).cuda().float() for i in range(self.n_slices)]
         for i in reversed(range(self.n_slices)):
-            print("rank", self.rank, "recv from", self.model_parallel_next_src_rank, "embedding_dy", flush=True)
             self.comm.recv_tensor(embedding_dy[i], self.model_parallel_next_src_rank)
 
             sliced_x_embedding_outputs[i].backward(embedding_dy[i])
@@ -232,7 +228,6 @@ class NCCLTransformerRunner:
             
 
     def step(self):
-        print("rank", self.rank, "start step", flush=True)
         # if we're using embedding, we always call the normal create_inputs()
         if self.rank != 0 or self.use_embedding:
             input_x = self.config.create_inputs_empty()
@@ -254,7 +249,6 @@ class NCCLTransformerRunner:
             x = sliced_x[i]
             if self.rank == self.model_parallel_src_rank:
                 if (not self.use_embedding and self.pipeline_parallel_group_rank > 0) or self.use_embedding:
-                    print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "x", flush=True)
                     self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
             dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
             x.requires_grad_()
@@ -278,9 +272,9 @@ class NCCLTransformerRunner:
             if not self.use_embedding:
                 send_cond = send_cond and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1
             if send_cond:
-                print("rank", self.rank, "send to", self.model_parallel_next_src_rank, "x", flush=True)
                 self.comm.send_tensor(x, self.model_parallel_next_src_rank)
 
+        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
         # backward
         start_time = time.time()
         if self.mixed_precision:
@@ -290,7 +284,6 @@ class NCCLTransformerRunner:
             self.optimizer.zero_grad()
 
         # TODO: fix parameters
-        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
         grad_all_outputs = self.compute_loss(all_outputs)
 
         a = []
@@ -323,7 +316,6 @@ class NCCLTransformerRunner:
             if self.rank == self.model_parallel_src_rank and (
                 (self.pipeline_parallel_group_rank > 0 and not self.use_embedding) or self.use_embedding
             ):
-                print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "dx", flush=True)
                 self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
             for grad_w, w in zip(dw, self.all_parameters):
                 if w.grad is None:
