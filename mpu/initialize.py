@@ -29,7 +29,7 @@ _MODEL_PARALLEL_SIZE = None
 _PIPELINE_PARALLEL_SIZE = None
 
 _MODEL_PARALLEL_GROUP = None
-_MODEL_PARALLEL_GROUP_RANK = -1
+_MODEL_PARALLEL_GROUP_RANK = None
 
 _PIPELINE_PARALLEL_GROUP_RANK = None
 
@@ -176,6 +176,8 @@ def get_model_parallel_next_src_rank():
     assert _INITIALIZED
     if _RANK < _EMBEDDING_PARALLEL_SIZE:
         return _EMBEDDING_PARALLEL_SIZE
+    elif _RANK == _WORLD_SIZE - 1:
+        return 0
     else:
         return get_model_parallel_src_rank() + _MODEL_PARALLEL_SIZE
 
@@ -188,7 +190,7 @@ def get_model_parallel_prev_dst_rank():
     if _RANK < _EMBEDDING_PARALLEL_SIZE:
         return _WORLD_SIZE - 1
     else:
-        return get_model_parallel_prev_dst_rank() - _MODEL_PARALLEL_SIZE
+        return get_model_parallel_dst_rank() - _MODEL_PARALLEL_SIZE
 
 
 def destroy_model_parallel():

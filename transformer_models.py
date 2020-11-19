@@ -86,12 +86,12 @@ class TransformerConfig:
         # tie output embedding weights to input embedding weights
         tied_output_layer.weight = embedding_layer.weight
 
-        tokens = torch.randint(0, EMBEDDING_VOCAB_SIZE, size=(self.seq_len, self.batch_size)).long()
-        zero_pad = torch.zeros(size=(1, self.batch_size)).long()
+        tokens = torch.randint(0, EMBEDDING_VOCAB_SIZE, size=(self.seq_len + 1, self.batch_size)).long()
         # offset by 1 for language models
-        inputs = torch.cat([zero_pad, tokens[1:, :]], dim=0)
+        inputs = tokens[:-1]
+        outputs = tokens[1:]
 
-        return embedding_layer, tied_output_layer, inputs, tokens
+        return embedding_layer, tied_output_layer, inputs, outputs
 
     def create_layers_and_inputs_with_embedding(self, device='cpu'):
         embedding_layer, tied_output_layer, inputs, outputs = self.create_embedding_and_inputs()

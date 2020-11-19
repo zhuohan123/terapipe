@@ -132,6 +132,7 @@ class NCCLTransformerRunner:
         for i in range(self.n_slices):
             print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "x", flush=True)
             self.comm.recv_tensor(final_outputs[i], self.model_parallel_prev_dst_rank)
+            final_outputs[i].requires_grad = True
 
             final_embedding_outputs[i] = self.layers[1](final_outputs[i])
         # compute loss
@@ -149,6 +150,7 @@ class NCCLTransformerRunner:
             outputs = [y]
             grad_outputs = [dy]
             inputs = self.all_parameters + [x]
+            
             all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
             dw = all_grads[:self.n_params]
             dx = all_grads[self.n_params]
@@ -224,11 +226,7 @@ class NCCLTransformerRunner:
         print("rank", self.rank, "calculate loss", flush=True)
         grad_all_outputs = torch.autograd.grad(loss, all_outputs)
 
-        if self.use_embedding:
-            for i in reversed(range(len(grad_all_outputs))):
-                print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "grad_all_outputs", flush=True)
-                self.comm.send_tensor(grad_all_outputs[i], self.model_parallel_prev_dst_rank)
-
+        
         print("rank", self.rank, "finish calculating loss", flush=True)
         return grad_all_outputs
             
@@ -293,7 +291,7 @@ class NCCLTransformerRunner:
 
         # TODO: fix parameters
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
-        grad_all_outputs = self.compute_loss()
+        grad_all_outputs = self.compute_loss(all_outputs)
 
         a = []
         da = []
