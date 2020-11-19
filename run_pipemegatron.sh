@@ -10,7 +10,7 @@ PIPELINE_PARALLEL_SIZE=$4
 MODEL=$5
 N_SLICES=$6
 N_STEPS=$7
-EXTRA_ARGS=$8
+EXTRA_ARGS=${@:8}
 
 PYTHON_EXEC=$(which python)
 PYTHON_SCRIPT=$(realpath -s test_transformer_pipemegatron.py)
