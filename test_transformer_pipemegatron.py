@@ -126,6 +126,8 @@ class NCCLTransformerRunner:
             sliced_x_embedding_outputs.append(embedding_output)
 
         final_outputs = uniform_slice_x(self.config.create_inputs_empty(), self.n_slices)
+        if self.mixed_precision:
+            final_outputs = [o.half() for o in final_outputs]
         final_embedding_outputs = [None for i in range(self.n_slices)]
 
         # receive final layer output from last pipeline group and compute softmax
@@ -169,6 +171,8 @@ class NCCLTransformerRunner:
 
         # first embedding layer backwards pass
         embedding_dy = [torch.zeros(embedding_dy_shape).cuda().float() for i in range(self.n_slices)]
+        if self.mixed_precision:
+            embedding_dy = [o.half() for o in embedding_dy]
         for i in reversed(range(self.n_slices)):
             self.comm.recv_tensor(embedding_dy[i], self.model_parallel_next_src_rank)
 
