@@ -119,6 +119,7 @@ class NCCLTransformerRunner:
             self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
     def step(self):
+        print("rank", self.rank, "start step", flush=True)
         if self.rank != 0:
             input_x = self.config.create_inputs_empty()
         elif self.use_embedding:
@@ -142,6 +143,7 @@ class NCCLTransformerRunner:
             x = sliced_x[i]
             if self.rank == self.model_parallel_src_rank:
                 if (self.pipeline_parallel_group_rank > 0 and not self.use_embedding) or (self.use_embedding and self.rank >= int(self.use_embedding)):
+                    print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "line 146", flush=True)
                     self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
             if self.rank >= int(self.use_embedding):
                 dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
@@ -177,6 +179,7 @@ class NCCLTransformerRunner:
                 send_cond = (self.rank == self.model_parallel_dst_rank
                     and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1)
             if send_cond:
+                print("rank", self.rank, "send to", self.model_parallel_next_src_rank, "line 182", flush=True)
                 self.comm.send_tensor(x, self.model_parallel_next_src_rank)
 
         # backward
@@ -193,6 +196,7 @@ class NCCLTransformerRunner:
                 all_outputs_embedding = all_outputs
                 all_outputs = uniform_slice_x(self.config.create_inputs_empty(), self.n_slices)
                 for i in range(self.n_slices):
+                    print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "line 199", flush=True)
                     self.comm.recv_tensor(all_outputs[i], self.model_parallel_prev_dst_rank)
                     all_outputs[i].requires_grad_()
                 all_embedding_outputs = []
@@ -228,6 +232,7 @@ class NCCLTransformerRunner:
 
             if self.use_embedding and self.rank < int(self.use_embedding):
                 for i in range(len(grad_all_outputs)):
+                    print("rank", self.rank, "send to", self.world_size - 1, "line 235", flush=True)
                     self.comm.send_tensor(grad_all_outputs[i], self.world_size - 1)
             print("rank", self.rank, "finish calculating loss", flush=True)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
@@ -241,6 +246,7 @@ class NCCLTransformerRunner:
         elif self.use_embedding and self.model_parallel_dst_rank == self.rank and self.world_size - 1 == self.rank:
             grad_all_outputs = [torch.zeros(all_outputs[0].size()).cuda().float() for i in range(self.n_slices)]
             for i in range(self.n_slices):
+                print("rank", self.rank, "recv from", int(self.use_embedding) - 1, "line 249", flush=True)
                 self.comm.recv_tensor(grad_all_outputs[i], int(self.use_embedding) - 1)
         for i in reversed(range(self.n_slices)):
             if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1 and not self.use_embedding:
@@ -251,8 +257,10 @@ class NCCLTransformerRunner:
                 dy = sliced_grad_x[i]
                 if self.rank == self.model_parallel_dst_rank or (self.rank == int(self.use_embedding) - 1 and self.use_embedding):
                     if self.rank == int(self.use_embedding) - 1 and self.use_embedding:
+                        print("rank", self.rank, "recv from", int(self.use_embedding), "line 260", flush=True)
                         self.comm.recv_tensor(dy, int(self.use_embedding))
                     elif self.rank == self.model_parallel_dst_rank:
+                        print("rank", self.rank, "recv from", self.model_parallel_next_src_rank, "line 263", flush=True)
                         self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
                     if (self.use_embedding and self.rank != int(self.use_embedding) - 1) or not self.use_embedding:
                         dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
@@ -271,6 +279,7 @@ class NCCLTransformerRunner:
             da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
             if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
+                print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "line 282", flush=True)
                 self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
             for grad_w, w in zip(dw, self.all_parameters):
                 if w.grad is None:
