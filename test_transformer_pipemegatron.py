@@ -55,26 +55,10 @@ class NCCLTransformerRunner:
         self.model_parallel_src_rank = mpu.get_model_parallel_src_rank()
         self.model_parallel_dst_rank = mpu.get_model_parallel_dst_rank()
 
-        self.model_parallel_next_src_rank = None
-        if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
-            self.model_parallel_next_src_rank = self.model_parallel_src_rank + self.model_parallel_size
-        elif self.use_embedding and self.rank == self.model_parallel_dst_rank:
-            # final GPU in final group should send to embedding group
-            self.model_parallel_next_src_rank = int(self.use_embedding) - 1
-        elif self.use_embedding and self.rank == int(self.use_embedding) - 1:
-            # embedding should send to first group
-            self.model_parallel_next_src_rank = int(self.use_embedding) + 1
+        self.model_parallel_next_src_rank = mpu.get_model_parallel_next_src_rank()
 
 
-        self.model_parallel_prev_dst_rank = None
-        if self.pipeline_parallel_group_rank > 0:
-            self.model_parallel_prev_dst_rank = self.model_parallel_dst_rank - self.model_parallel_size
-        elif self.use_embedding and self.rank == int(self.use_embedding):
-            # first GPU in first group sends to embedding
-            self.model_parallel_prev_dst_rank = int(self.use_embedding) - 1
-        elif self.use_embedding and self.rank == int(self.use_embedding) - 1:
-            # Edge case, softmax layer prev rank is the last GPU
-            self.model_parallel_prev_dst_rank = self.world_size - 1
+        self.model_parallel_prev_dst_rank = mpu.get_model_parallel_prev_dst_rank()
 
         self.n_steps = n_steps
 
@@ -118,18 +102,143 @@ class NCCLTransformerRunner:
         else:
             self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
 
+    def step_embedding(self):
+        _, _, input_x, target = self.config.create_embedding_and_inputs()
+        input_x, target = input_x.cuda(), target.cuda()
+
+        # embedding -> send to first pipeline group -> wait recv final outputs -> compute loss+embedding backwards pass -> send grad to last pipeline group
+        # -> wait recv first pipeline group gradients -> compute embedding backwards pass
+        sliced_x_embedding = uniform_slice_x(input_x, self.n_slices)
+        sliced_x_embedding_outputs = []
+
+        # TODO: implement multi-GPU embedding group
+
+        # compute embedding layer and send embedding output to first pipeline group
+        for i in range(self.n_slices):
+            embedding_output = self.layers[0](sliced_x_embedding[i])
+            print("rank", self.rank, "send to", self.model_parallel_next_src_rank, "sliced_x_embedding", flush=True)
+            self.comm.send_tensor(embedding_output, self.model_parallel_next_src_rank)
+
+            sliced_x_embedding_outputs.append(embedding_output)
+
+        final_outputs = uniform_slice_x(self.config.create_inputs_empty(), self.n_slices)
+        final_embedding_outputs = [None for i in range(self.n_slices)]
+
+        # receive final layer output from last pipeline group and compute softmax
+        for i in range(self.n_slices):
+            print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "x", flush=True)
+            self.comm.recv_tensor(final_outputs[i], self.model_parallel_prev_dst_rank)
+
+            final_embedding_outputs[i] = self.layers[1](final_outputs[i])
+        # compute loss
+        # TODO: pipeline this computation
+        grad_all_outputs = self.compute_loss(final_embedding_outputs, target)
+
+        embedding_dy_shape = None
+
+        # embedding backwards pass + send dy to last pipeline group
+        for i in reversed(range(self.n_slices)):
+            dy = grad_all_outputs[i]
+
+            y = final_embedding_outputs[i]
+            x = final_outputs[i]
+            outputs = [y]
+            grad_outputs = [dy]
+            inputs = self.all_parameters + [x]
+            all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
+            dw = all_grads[:self.n_params]
+            dx = all_grads[self.n_params]
+
+            print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "dx", flush=True)
+            self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
+
+            embedding_dy_shape = dx.size()
+            
+            for grad_w, w in zip(dw, self.all_parameters):
+                if w.grad is None:
+                    w.grad = grad_w.detach()
+                else:
+                    w.grad += grad_w
+
+        # first embedding layer backwards pass
+        embedding_dy = [torch.zeros(embedding_dy_shape).cuda().float() for i in range(self.n_slices)]
+        for i in reversed(range(self.n_slices)):
+            print("rank", self.rank, "recv from", self.model_parallel_next_src_rank, "embedding_dy", flush=True)
+            self.comm.recv_tensor(embedding_dy[i], self.model_parallel_next_src_rank)
+
+            sliced_x_embedding_outputs[i].backward(embedding_dy[i])
+
+
+        # copy FP16 model gradients to FP32 master before comparing/optimizing
+        if self.mixed_precision:
+            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                if master_param.grad is None:
+                    master_param.grad = master_param.new(*master_param.size())
+                master_param.grad.copy_(model_param.grad)
+
+                # descale master weights
+                master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
+
+        self.optimizer.step()
+        if self.mixed_precision:
+            # copy master updated FP32 parameters back to FP16
+            with torch.no_grad():
+                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                    model_param.copy_(master_param)
+
+
+
+        
+
+
+    def compute_loss(self, all_outputs, target=None):
+        if self.use_embedding and self.rank >= int(self.use_embedding):
+            return None
+
+        if not self.use_embedding and self.pipeline_parallel_group_rank != self.pipeline_parallel_size - 1:
+            return None
+
+        concated_outputs = torch.cat(all_outputs, dim=0)
+
+        if self.mixed_precision:
+            # cast reductions to FP32
+            concated_outputs = concated_outputs.float()
+
+        if self.use_embedding:
+            criterion = nn.CrossEntropyLoss()
+            concated_outputs = concated_outputs.permute(1, 2, 0)
+            target = target.permute(1, 0)
+            loss = criterion(concated_outputs, target)
+        else:
+            loss = torch.mean(concated_outputs)
+
+        # scale up the loss at the source for FP16, then de-scale when each
+        # worker performs step() or correctness checks
+        if self.mixed_precision:
+            loss = loss.float() * LOSS_SCALE_FACTOR
+            loss = loss.half()
+        print("rank", self.rank, "calculate loss", flush=True)
+        grad_all_outputs = torch.autograd.grad(loss, all_outputs)
+
+        if self.use_embedding:
+            for i in reversed(range(len(grad_all_outputs))):
+                print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "grad_all_outputs", flush=True)
+                self.comm.send_tensor(grad_all_outputs[i], self.model_parallel_prev_dst_rank)
+
+        print("rank", self.rank, "finish calculating loss", flush=True)
+        return grad_all_outputs
+            
+
     def step(self):
         print("rank", self.rank, "start step", flush=True)
-        if self.rank != 0:
+        # if we're using embedding, we always call the normal create_inputs()
+        if self.rank != 0 or self.use_embedding:
             input_x = self.config.create_inputs_empty()
-        elif self.use_embedding:
-            _, _, input_x, target = self.config.create_embedding_and_inputs()
-            input_x, target = input_x.cuda(), target.cuda()
         else:
             input_x = self.config.create_inputs()
         sliced_x = uniform_slice_x(input_x, self.n_slices)
 
-        if self.mixed_precision and self.rank >= int(self.use_embedding):
+        if self.mixed_precision:
             sliced_x = [x.half() for x in sliced_x]
         # TODO: patch forward+backward to send embedding+softmax correctly
         # forward
@@ -142,26 +251,18 @@ class NCCLTransformerRunner:
         for i in range(self.n_slices):
             x = sliced_x[i]
             if self.rank == self.model_parallel_src_rank:
-                if (self.pipeline_parallel_group_rank > 0 and not self.use_embedding) or (self.use_embedding and self.rank >= int(self.use_embedding)):
-                    print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "line 146", flush=True)
+                if (not self.use_embedding and self.pipeline_parallel_group_rank > 0) or self.use_embedding:
+                    print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "x", flush=True)
                     self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
-            if self.rank >= int(self.use_embedding):
-                dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
-                x.requires_grad_()
+            dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
+            x.requires_grad_()
             all_inputs.append(x)
             new_attn_caches_detached = []
             attn_hiddens = []
             attn_hiddens_detached = []
 
-            layers_to_use_start, layers_to_use_end = 0, len(self.layers)
-            if self.use_embedding:
-                layers_to_use_end = 1
-            for layer, attn_cache in zip(self.layers[layers_to_use_start:layers_to_use_end], attn_caches):
-                if isinstance(layer, TransformerLayer):
-                    x, new_attn_cache = layer(x, attn_cache)
-                else:
-                    x = layer(x)
-                    new_attn_cache = {}
+            for layer, attn_cache in zip(self.layers, attn_caches):
+                x, new_attn_cache = layer(x, attn_cache)
                 attn_hiddens += [v for k, v in new_attn_cache.items()]
                 new_attn_cache_detached = {k: v.detach().requires_grad_() for k, v in new_attn_cache.items()}
                 attn_hiddens_detached += [v for k, v in new_attn_cache_detached.items()]
@@ -171,15 +272,11 @@ class NCCLTransformerRunner:
             all_attn_hiddens_detached.append(attn_hiddens_detached)
             all_outputs.append(x)
 
-            send_cond = False
-            if self.use_embedding:
-                send_cond = (self.rank == self.model_parallel_dst_rank
-                    and self.pipeline_parallel_group_rank < self.pipeline_parallel_size) or self.rank == int(self.use_embedding) - 1
-            else:
-                send_cond = (self.rank == self.model_parallel_dst_rank
-                    and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1)
+            send_cond = self.rank == self.model_parallel_dst_rank
+            if not self.use_embedding:
+                send_cond = send_cond and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1
             if send_cond:
-                print("rank", self.rank, "send to", self.model_parallel_next_src_rank, "line 182", flush=True)
+                print("rank", self.rank, "send to", self.model_parallel_next_src_rank, "x", flush=True)
                 self.comm.send_tensor(x, self.model_parallel_next_src_rank)
 
         # backward
@@ -189,97 +286,42 @@ class NCCLTransformerRunner:
                 layer.zero_grad()
         else:
             self.optimizer.zero_grad()
-        loss_cond = False
-        if self.use_embedding:
-            loss_cond = self.rank < int(self.use_embedding)
-            if loss_cond:
-                all_outputs_embedding = all_outputs
-                all_outputs = uniform_slice_x(self.config.create_inputs_empty(), self.n_slices)
-                for i in range(self.n_slices):
-                    print("rank", self.rank, "recv from", self.model_parallel_prev_dst_rank, "line 199", flush=True)
-                    self.comm.recv_tensor(all_outputs[i], self.model_parallel_prev_dst_rank)
-                    all_outputs[i].requires_grad_()
-                all_embedding_outputs = []
-                for i in range(self.n_slices):
-                    embedding_layer = self.layers[-1]
-                    softmax_output = embedding_layer(all_outputs[i])
-                    all_embedding_outputs.append(softmax_output)
-        else:
-            loss_cond = self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1
-        if loss_cond:
-            print("rank", self.rank, "calculate loss", flush=True)
-            if self.use_embedding and self.rank == int(self.use_embedding) - 1:
-                concated_outputs = torch.cat(all_embedding_outputs, dim=0)
-            else:
-                concated_outputs = torch.cat(all_outputs, dim=0)
-            if self.mixed_precision:
-                # cast reductions to FP32
-                concated_outputs = concated_outputs.float()
-            if self.use_embedding:
-                criterion = nn.CrossEntropyLoss()
-                concated_outputs = concated_outputs.permute(1, 2, 0)
-                target = target.permute(1, 0)
-                loss = criterion(concated_outputs, target)
-            else:
-                loss = torch.mean(concated_outputs)
 
-            # scale up the loss at the source for FP16, then de-scale when each
-            # worker performs step() or correctness checks
-            if self.mixed_precision:
-                loss = loss.float() * LOSS_SCALE_FACTOR
-                loss = loss.half()
-            grad_all_outputs = torch.autograd.grad(loss, all_outputs)
-
-            if self.use_embedding and self.rank < int(self.use_embedding):
-                for i in range(len(grad_all_outputs)):
-                    print("rank", self.rank, "send to", self.world_size - 1, "line 235", flush=True)
-                    self.comm.send_tensor(grad_all_outputs[i], self.world_size - 1)
-            print("rank", self.rank, "finish calculating loss", flush=True)
+        # TODO: fix parameters
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
+        grad_all_outputs = self.compute_loss()
+
         a = []
         da = []
-        if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1 or (self.pipeline_parallel_group_rank < self.pipeline_parallel_size and self.use_embedding):
+        if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1 or self.use_embedding:
             grad_x = self.config.create_inputs_empty()
             if self.mixed_precision:
                 grad_x = grad_x.half()
             sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
-        elif self.use_embedding and self.model_parallel_dst_rank == self.rank and self.world_size - 1 == self.rank:
-            grad_all_outputs = [torch.zeros(all_outputs[0].size()).cuda().float() for i in range(self.n_slices)]
-            for i in range(self.n_slices):
-                print("rank", self.rank, "recv from", int(self.use_embedding) - 1, "line 249", flush=True)
-                self.comm.recv_tensor(grad_all_outputs[i], int(self.use_embedding) - 1)
+
         for i in reversed(range(self.n_slices)):
             if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1 and not self.use_embedding:
                 dy = grad_all_outputs[i]
-            elif self.use_embedding and self.model_parallel_dst_rank == self.rank and self.world_size - 1 == self.rank:
-                dy = grad_all_outputs[i]
             else:
                 dy = sliced_grad_x[i]
-                if self.rank == self.model_parallel_dst_rank or (self.rank == int(self.use_embedding) - 1 and self.use_embedding):
-                    if self.rank == int(self.use_embedding) - 1 and self.use_embedding:
-                        print("rank", self.rank, "recv from", int(self.use_embedding), "line 260", flush=True)
-                        self.comm.recv_tensor(dy, int(self.use_embedding))
-                    elif self.rank == self.model_parallel_dst_rank:
-                        print("rank", self.rank, "recv from", self.model_parallel_next_src_rank, "line 263", flush=True)
-                        self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
-                    if (self.use_embedding and self.rank != int(self.use_embedding) - 1) or not self.use_embedding:
-                        dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
-            if self.rank == int(self.use_embedding) - 1 and self.use_embedding:
-                all_outputs_embedding[i].backward(dy)
-                continue
+                if self.rank == self.model_parallel_dst_rank:
+                    self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
+                dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
             y = all_outputs[i]
             x = all_inputs[i]
             outputs = [y] + a
             grad_outputs = [dy] + da
             inputs = self.all_parameters + [x] + all_attn_hiddens_detached[i]
-
             all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
             dw = all_grads[:self.n_params]
             dx = all_grads[self.n_params]
             da = list(all_grads[self.n_params + 1:])
             a = all_attn_hiddens[i]
-            if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "line 282", flush=True)
+
+            if self.rank == self.model_parallel_src_rank and (
+                (self.pipeline_parallel_group_rank > 0 and not self.use_embedding) or self.use_embedding
+            ):
+                print("rank", self.rank, "send to", self.model_parallel_prev_dst_rank, "dx", flush=True)
                 self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
             for grad_w, w in zip(dw, self.all_parameters):
                 if w.grad is None:
@@ -308,9 +350,14 @@ class NCCLTransformerRunner:
 
     def run(self):
         all_step_times = []
+
+        step_func = self.step
+        if self.use_embedding and self.rank < int(self.use_embedding):
+            step_func = self.step_embedding
+
         for _ in range(self.n_steps):
             start_time = time.time()
-            self.step()
+            step_func()
             step_time = time.time() - start_time
             all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)

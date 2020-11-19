@@ -135,6 +135,9 @@ def get_model_parallel_world_size():
 
 def get_model_parallel_rank():
     assert _INITIALIZED
+    # Embedding parallel is not implemented yet.
+    if _RANK < _EMBEDDING_PARALLEL_SIZE:
+        return _RANK
     return _MODEL_PARALLEL_GROUP_RANK
 
 
@@ -164,6 +167,28 @@ def get_pipeline_parallel_group_rank():
     """Return my group rank pipeline parallel."""
     assert _INITIALIZED
     return _PIPELINE_PARALLEL_GROUP_RANK
+
+def get_model_parallel_next_src_rank():
+    """
+    Return my next group rank pipeline parallel, unless I am
+    an embedding group, in which case return the first model parallel group's src. rank.
+    """
+    assert _INITIALIZED
+    if _RANK < _EMBEDDING_PARALLEL_SIZE:
+        return _EMBEDDING_PARALLEL_SIZE
+    else:
+        return get_model_parallel_src_rank() + _MODEL_PARALLEL_SIZE
+
+def get_model_parallel_prev_dst_rank():
+    """
+    Return my previous group rank pipeline parallel, unless I am
+    an embedding group, in which case return the last model parallel group's dest. rank.
+    """
+    assert _INITIALIZED
+    if _RANK < _EMBEDDING_PARALLEL_SIZE:
+        return _WORLD_SIZE - 1
+    else:
+        return get_model_parallel_prev_dst_rank() - _MODEL_PARALLEL_SIZE
 
 
 def destroy_model_parallel():
