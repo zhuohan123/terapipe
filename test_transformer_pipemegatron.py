@@ -10,7 +10,7 @@ from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 import mpu
 import nccl
-from utils import set_random_seed
+from utils import set_random_seed, mem_report
 from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_x,
     ModelParallelTransformerLayer,
@@ -142,9 +142,9 @@ class NCCLTransformerRunner:
         start_time = time.time()
         if self.mixed_precision:
             for layer in self.layers:
-                layer.zero_grad()
+                layer.zero_grad(set_to_none=True)
         else:
-            self.optimizer.zero_grad()
+            self.optimizer.zero_grad(set_to_none=True)
 
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
@@ -221,6 +221,7 @@ class NCCLTransformerRunner:
 
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
+        mem_report()
 
     def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
         # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
