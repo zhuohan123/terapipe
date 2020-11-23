@@ -156,12 +156,12 @@ class MultiheadLMAttentionWithCache(nn.Module):
             "v": v,
         }
         
-        attn_weights = torch.bmm(q, k.transpose_(1, 2))
+        attn_weights = torch.bmm(q, k.transpose(1, 2))
         del q
         assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
         attn_weights += attn_mask[None, :, :]
         del attn_mask
-        # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
+        # cannot make this inplace due to autograd restriction
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
         del attn_weights
         attn = torch.bmm(attn_probs, v)
