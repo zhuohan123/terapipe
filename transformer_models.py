@@ -180,7 +180,6 @@ class MultiheadLMAttentionWithCache(nn.Module):
         assert embed_dim == self.embed_dim
         # TODO: figure out how to improve mem usage of contiguous() call
         q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
-        #q = q * self.scaling
         q.mul_(self.scaling)
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
         src_len = tgt_len
@@ -227,14 +226,12 @@ class TransformerLayer(nn.Module):
         y = x
         x = self.attn_ln(x)
         x, new_attn_cache = self.attn(x, attn_cache)
-        #x = y + x
         x.add_(y)
         y = x
         x = self.fc_ln(x)
         x = self.fc1(x)
         x = F.relu(x, inplace=True)
         x = self.fc2(x)
-        #x = y + x
         x.add_(y)
         return x, new_attn_cache
 
