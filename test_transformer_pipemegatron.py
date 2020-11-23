@@ -218,7 +218,7 @@ class NCCLTransformerRunner:
             self.step()
             step_time = time.time() - start_time
             gc.collect()
-            torch.cuda.empty_cache()
+            
             all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)
         if len(all_step_times) > WARM_UP_ROUNDS:
