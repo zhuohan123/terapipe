@@ -6,6 +6,8 @@ import threading
 import queue
 import mpu
 
+torch.backends.cudnn.benchmark = True
+
 # https://github.com/NVIDIA/apex/issues/93
 # since the purpose of mask is to set exp(val) to 0
 # a large negative value serves the same purpose here
@@ -135,11 +137,14 @@ class MultiheadLMAttentionWithCache(nn.Module):
     def forward(self, x, cache=None):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
-        q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose(0, 1).chunk(3, dim=-1)
-        q = q * self.scaling
-        attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu(1)
+        # TODO: figure out how to improve mem usage of contiguous() call
+        q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
+        #q = q * self.scaling
+        q.mul_(self.scaling)
+        attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
         src_len = tgt_len
         if cache is not None:
+            # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
             cache_len = cache["k"].size()[1]
             k = torch.cat([cache["k"], k], dim=1)
             v = torch.cat([cache["v"], v], dim=1)
@@ -150,13 +155,14 @@ class MultiheadLMAttentionWithCache(nn.Module):
             "k": k,
             "v": v,
         }
-
-        attn_weights = torch.bmm(q, k.transpose(1, 2))
+        
+        attn_weights = torch.bmm(q, k.transpose_(1, 2))
         assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
         attn_weights += attn_mask[None, :, :]
+        # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
         attn = torch.bmm(attn_probs, v)
-        attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, -1)
+        attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
         attn = self.out_proj(attn)
 
         return attn, new_cache
@@ -176,13 +182,15 @@ class TransformerLayer(nn.Module):
         y = x
         x = self.attn_ln(x)
         x, new_attn_cache = self.attn(x, attn_cache)
-        x = y + x
+        #x = y + x
+        x.add_(y)
         y = x
         x = self.fc_ln(x)
         x = self.fc1(x)
-        x = F.relu(x)
+        x = F.relu(x, inplace=True)
         x = self.fc2(x)
-        x = y + x
+        #x = y + x
+        x.add_(y)
         return x, new_attn_cache
 
 
@@ -218,6 +226,7 @@ class ModelParallelTransformerLayer(TransformerLayer):
         self.model_parallel_size = mpu.get_model_parallel_world_size()
         assert ffn_embedding_dim % self.model_parallel_size == 0
 
+        # TODO: write a custom inplace LayerNorm layer
         self.attn_ln = nn.LayerNorm(embedding_dim).to(device)
         self.attn = ModelParallelMultiheadLMAttentionWithCache(embedding_dim, num_attention_heads, device=device)
         self.fc_ln = nn.LayerNorm(embedding_dim).to(device)
