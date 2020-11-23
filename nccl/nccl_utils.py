@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import torch
 
 # os.environ['NCCL_DEBUG'] = 'INFO'
 os.environ['NCCL_SOCKET_NTHREADS'] = '4'
@@ -9,7 +10,7 @@ os.environ['NCCL_NSOCKS_PERTHREAD'] = '4'
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 from py_nccl_sendrecv import NCCLGroup, NCCL, get_unique_id
 
-
+@torch.jit.ignore
 def get_nccl_communicator(device_id, rank, world_size, use_mpi=False):
     if use_mpi:
         try:

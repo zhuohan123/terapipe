@@ -248,7 +248,7 @@ class ColumnParallelLinear(torch.nn.Module):
             self.output_size_per_partition, 0, init_method,
             stride=stride, initialize_locally=initialize_locally,
             return_master_weight=keep_master_weight_for_test)
-
+    @torch.jit.ignore
     def forward(self, input_):
         # Set up backprop all-reduce.
         input_parallel = copy_to_model_parallel_region(input_)
@@ -324,8 +324,9 @@ class RowParallelLinear(torch.nn.Module):
             self.input_size_per_partition, 1, init_method,
             stride=stride, initialize_locally=initialize_locally,
             return_master_weight=keep_master_weight_for_test)
-
-    def forward(self, input_, return_reduce_time=False):
+    @torch.jit.ignore
+    def forward(self, input_):
+        return_reduce_time = False
         # Set up backprop all-reduce.
         if self.input_is_parallel:
             input_parallel = input_

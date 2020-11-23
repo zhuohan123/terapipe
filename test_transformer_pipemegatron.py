@@ -59,12 +59,12 @@ class NCCLTransformerRunner:
         self.n_layers = (config.n_layers // pipeline_parallel_size
                          + int(rank < config.n_layers % pipeline_parallel_size))
         self.layers = [
-            ModelParallelTransformerLayer(
+            torch.jit.script(ModelParallelTransformerLayer(
                 config.embedding_dim,
                 config.ffn_embedding_dim,
                 config.num_attention_heads,
                 device="cuda",
-            )
+            ))
             for _ in range(self.n_layers)
         ]
 
@@ -202,14 +202,24 @@ class NCCLTransformerRunner:
                 master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
 
         self.optimizer.step()
+        """
         if self.mixed_precision:
             # copy master updated FP32 parameters back to FP16
             with torch.no_grad():
                 for model_param, master_param in zip(self.all_parameters, self.master_parameters):
                     model_param.copy_(master_param)
+        """
+        self.copy_fp16_params()
 
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
+    @torch.jit.ignore
+    def copy_fp16_params(self):
+        if self.mixed_precision:
+            # copy master updated FP32 parameters back to FP16
+            with torch.no_grad():
+                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                    model_param.copy_(master_param)
 
     def run(self):
         all_step_times = []

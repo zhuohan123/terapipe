@@ -18,7 +18,7 @@ import torch
 from .initialize import get_model_parallel_group
 from .utils import split_tensor_along_last_dim
 
-
+@torch.jit.ignore
 def _reduce(input_):
     """All-reduce the the input tensor across model parallel group."""
     group = get_model_parallel_group()
@@ -127,18 +127,18 @@ class _GatherFromModelParallelRegion(torch.autograd.Function):
 # -----------------
 # Helper functions.
 # -----------------
-
+@torch.jit.ignore
 def copy_to_model_parallel_region(input_):
     return _CopyToModelParallelRegion.apply(input_)
 
-
+@torch.jit.ignore
 def reduce_from_model_parallel_region(input_):
     return _ReduceFromModelParallelRegion.apply(input_)
 
-
+@torch.jit.ignore
 def scatter_to_model_parallel_region(input_):
     return _ScatterToModelParallelRegion.apply(input_)
 
-
+@torch.jit.ignore
 def gather_from_model_parallel_region(input_):
     return _GatherFromModelParallelRegion.apply(input_)

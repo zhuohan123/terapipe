@@ -5,13 +5,14 @@ import torch.nn.functional as F
 import threading
 import queue
 import mpu
+import typing
 
 torch.backends.cudnn.benchmark = True
 
 # https://github.com/NVIDIA/apex/issues/93
 # since the purpose of mask is to set exp(val) to 0
 # a large negative value serves the same purpose here
-NEG_INF = -65504
+NEG_INF = float(-65504)
 MODEL_CONFIGS = {
     # n_layers, hidden_size, sequence_length, num_attention_heads
     "test":        (24,   256,  128,   256 // 64),
@@ -134,26 +135,33 @@ class MultiheadLMAttentionWithCache(nn.Module):
         ), "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
-    def forward(self, x, cache=None):
+    def forward(self, x, cache: typing.Optional[typing.Dict[int, torch.Tensor]]=None):
+        if cache is None:
+            cache = {2: torch.zeros(1)}
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
         # TODO: figure out how to improve mem usage of contiguous() call
         q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
         #q = q * self.scaling
         q.mul_(self.scaling)
-        attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
+
+        neg_inf = -65504
+        attn_mask = x.new_full((tgt_len, tgt_len), neg_inf).triu_(1)
         src_len = tgt_len
-        if cache is not None:
+
+        K_VAL = 0
+        V_VAL = 1
+        if len(cache) > 1:
             # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
-            cache_len = cache["k"].size()[1]
-            k = torch.cat([cache["k"], k], dim=1)
-            v = torch.cat([cache["v"], v], dim=1)
+            cache_len = cache[K_VAL].size()[1]
+            k = torch.cat([cache[K_VAL], k], dim=1)
+            v = torch.cat([cache[V_VAL], v], dim=1)
             attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
             src_len += cache_len
 
         new_cache = {
-            "k": k,
-            "v": v,
+            K_VAL: k,
+            V_VAL: v,
         }
         
         attn_weights = torch.bmm(q, k.transpose(1, 2))
@@ -181,7 +189,7 @@ class TransformerLayer(nn.Module):
         self.fc1 = nn.Linear(embedding_dim, ffn_embedding_dim).to(device)
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
-    def forward(self, x, attn_cache=None):
+    def forward(self, x, attn_cache: typing.Optional[typing.Dict[int, torch.Tensor]]=None):
         seq_len, batch_size, _ = x.size()
         y = x
         x = self.attn_ln(x)
