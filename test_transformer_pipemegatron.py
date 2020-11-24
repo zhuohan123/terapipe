@@ -221,7 +221,7 @@ class NCCLTransformerRunner:
 
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
-        mem_report()
+        print("allocated", torch.cuda.memory_allocated(), "max allocated", torch.cuda.max_memory_allocated())
 
     def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
         # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
