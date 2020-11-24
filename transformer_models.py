@@ -180,8 +180,8 @@ class MultiheadLMAttentionWithCache(nn.Module):
         assert embed_dim == self.embed_dim
         # TODO: figure out how to improve mem usage of contiguous() call
         q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
-        
-        q *= self.scaling
+        # pytorch 1.7+ doesn't allow this inplace op
+        q = q * self.scaling
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
         src_len = tgt_len
         if cache is not None:
