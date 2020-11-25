@@ -48,6 +48,8 @@ MODEL_CONFIGS = {
     # this is for single node
     "gpt3-175b-single-node":   (2, 12288, 2048, 12288 // 128),
 }
+# MegatronLM vocabulary size
+EMBEDDING_VOCAB_SIZE = 51200
 
 
 class TransformerConfig:
@@ -102,6 +104,44 @@ class TransformerConfig:
         ]
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim)
         return transformer_layers, x
+
+    def create_embedding_and_inputs(self):
+        embedding_layer = nn.Embedding(EMBEDDING_VOCAB_SIZE, self.embedding_dim)
+
+        tied_output_layer = nn.Linear(self.embedding_dim, EMBEDDING_VOCAB_SIZE)
+        # tie output embedding weights to input embedding weights
+        tied_output_layer.weight = embedding_layer.weight
+
+        tokens = torch.randint(0, EMBEDDING_VOCAB_SIZE, size=(self.seq_len + 1, self.batch_size)).long()
+        # offset by 1 for language models
+        inputs = tokens[:-1]
+        outputs = tokens[1:]
+
+        return embedding_layer, tied_output_layer, inputs, outputs
+
+    def create_layers_and_inputs_with_embedding(self, device='cpu'):
+        embedding_layer, tied_output_layer, inputs, outputs = self.create_embedding_and_inputs()
+
+        if device == 'gpu':
+            transformer_layers = self.create_layers_gpu()
+            embedding_layer = embedding_layer.cuda(0)
+            tied_output_layer = tied_output_layer.cuda(0)
+            inputs = inputs.cuda(0)
+            outputs = outputs.cuda(0)
+        elif device == 'gpu_placement':
+            transformer_layers, _ = self.create_layers_and_inputs_on_gpu()
+            placement_device = self.placement_orders[0]
+            
+            embedding_layer = embedding_layer.cuda(placement_device)
+            tied_output_layer = tied_output_layer.cuda(placement_device)
+            inputs = inputs.cuda(placement_device)
+            outputs = outputs.cuda(placement_device)
+        else:
+            transformer_layers, _ = self.create_layers_and_inputs()
+
+        model_layers = [embedding_layer] + transformer_layers + [tied_output_layer]
+
+        return model_layers, inputs, outputs
 
     def create_layers_gpu(self, device='cuda'):
         transformer_layers = [
@@ -276,8 +316,12 @@ class SingleDeviceTransformer(nn.Module):
             attn_caches = [None] * len(self.layers)
         new_attn_caches = []
         for layer, attn_cache in zip(self.layers, attn_caches):
-            x, new_attn_cache = layer(x, attn_cache)
-            new_attn_caches.append(new_attn_cache)
+            if isinstance(layer, TransformerLayer):
+                x, new_attn_cache = layer(x, attn_cache)
+                new_attn_caches.append(new_attn_cache)
+            else:
+                x = layer(x)
+                new_attn_caches.append(None)
         return x, new_attn_caches
 
 

@@ -32,6 +32,9 @@ from .initialize import get_pipeline_parallel_group_rank
 from .initialize import initialize_model_parallel
 from .initialize import model_parallel_is_initialized
 
+from .initialize import get_model_parallel_next_src_rank
+from .initialize import get_model_parallel_prev_dst_rank
+
 from .layers import ColumnParallelLinear
 from .layers import ParallelEmbedding
 from .layers import RowParallelLinear
