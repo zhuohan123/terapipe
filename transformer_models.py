@@ -36,6 +36,17 @@ MODEL_CONFIGS = {
     # This is the model that Megatron-LM can run on
     # 48*8 NVIDIA-V100(16 GB) GPUs without OOM.
     "gpt3-175b-megatron":   (48, 12288//2, 2048, 384),
+    # these config are tuned to be fit into a single GPU (NVIDIA V100 16G)
+    "gpt2-1hm-single-device":    (10,  768, 2048,  768 // 64),
+    "gpt2-3hm-single-device":    (8, 1024, 2048, 1024 // 64),
+    "gpt2-7hm-single-device":    (6, 1280, 2048, 1280 // 64),
+    "gpt2-1b-single-device":     (4, 1600, 2048, 1600 // 64),
+    "gpt3-1b-single-device":     (5, 2048, 2048, 2048 // 128),
+    "gpt3-2b-single-device":     (3,  2560, 2048, 2560 // 80),
+    "gpt3-6b-single-device":     (2,  4096, 2048, 4096 // 128),
+    "gpt3-13b-single-device":    (1,  5120, 2048, 5120 // 128),
+    # this is for single node
+    "gpt3-175b-single-node":   (2, 12288, 2048, 12288 // 128),
 }
 
 
@@ -65,6 +76,21 @@ class TransformerConfig:
         self.n_devices = torch.cuda.device_count() if n_devices is None else n_devices
         self.placement_orders = placement_orders or list(range(self.n_devices))
 
+    @classmethod
+    def from_predefined_model(cls, model_name, n_devices=None):
+        n_layers, hidden_size, sequence_length, num_attention_heads = MODEL_CONFIGS[model_name]
+        return cls(
+            seq_len=sequence_length,
+            n_layers=n_layers,
+            embedding_dim=hidden_size,
+            num_attention_heads=num_attention_heads,
+            ffn_embedding_dim=hidden_size*4,
+            n_devices=n_devices)
+
+    @property
+    def attention_heads_dim(self):
+        return self.embedding_dim // self.num_attention_heads
+
     def create_layers_and_inputs(self):
         transformer_layers = [
             TransformerLayer(
@@ -89,13 +115,28 @@ class TransformerConfig:
         ]
         return transformer_layers
 
-    def create_inputs(self, device='cuda'):
+    def create_inputs(self, device='cuda', requires_grad=False):
         x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim, device=device)
-        return x
+        return x.requires_grad_(requires_grad)
 
     def create_inputs_empty(self, device='cuda'):
         x = torch.empty((self.seq_len, self.batch_size, self.embedding_dim), device=device)
         return x
+
+    def create_pseudo_inputs_outputs(self, device='cuda', inputs_requires_grad=False):
+        x = torch.randn(self.seq_len, self.batch_size, self.embedding_dim, device=device)
+        y = torch.cat([x[1:], torch.randn(1, self.batch_size, self.embedding_dim, device=device)])
+        return x.requires_grad_(inputs_requires_grad), y
+
+    def create_pseudo_attention_cache(self, length, device='cuda', requires_grad=False):
+        size = (self.batch_size * self.num_attention_heads, length, self.attention_heads_dim)
+        return [{
+            'k': torch.randn(size, device=device).requires_grad_(requires_grad),
+            'v': torch.randn(size, device=device).requires_grad_(requires_grad),
+        } for _ in range(self.n_layers)]
+
+    def compute_pseudo_loss(self, pred_y, y):
+        return ((pred_y - y)**2).mean()
 
     def create_layers_and_inputs_on_gpu(self):
         assert self.n_layers % self.n_devices == 0
