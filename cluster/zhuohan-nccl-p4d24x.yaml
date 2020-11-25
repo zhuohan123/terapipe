@@ -1,0 +1,65 @@
+# A unique identifier for the head node and workers of this cluster.
+cluster_name: model_parallel_nccl_p4d24x
+
+# The minimum, maximum and initial number of workers nodes to launch in addition
+# to the head node. For this project, we do not need the autoscaling, so we
+# always set these numbers the same.
+min_workers: 1
+initial_workers: 1
+max_workers: 1
+
+provider:
+    type: aws
+    region: us-west-2
+    availability_zone: us-west-2c
+    cache_stopped_nodes: False
+
+auth:
+    ssh_user: ubuntu
+
+head_node:
+    InstanceType: p4d.24xlarge
+    ImageId: ami-02c050ca6e06e2228 # pipe-p4-efa-1
+    SecurityGroupIds:
+        - "sg-f55048b4"
+    SubnetId:
+    Placement:
+        GroupName: pipe-group
+
+    NetworkInterfaces:
+        - AssociatePublicIpAddress: True
+          InterfaceType: efa
+          DeviceIndex: 0
+          SubnetId: subnet-1c08eb41
+
+worker_nodes:
+    InstanceType: p4d.24xlarge
+    ImageId: ami-02c050ca6e06e2228 # pipe-p4-efa-1
+    SecurityGroupIds:
+        - "sg-f55048b4"
+    SubnetId:
+    Placement:
+        GroupName: pipe-group
+    NetworkInterfaces:
+        - AssociatePublicIpAddress: True
+          InterfaceType: efa
+          DeviceIndex: 0
+          SubnetId: subnet-1c08eb41
+
+setup_commands:
+    - sudo mount -t efs fs-6dad81c6:/ efs
+    - sudo chmod 777 efs
+
+# Custom commands that will be run on the head node after common setup.
+head_setup_commands: []
+
+# Command to start ray on the head node. You don't need to change this.
+head_start_ray_commands:
+    - ray stop
+    - "sudo ulimit -n 65536; ray start --head --port=6379 --object-manager-port=8076 --autoscaling-config=~/ray_bootstrap_config.yaml --resources='{\"machine\": 1}'"
+
+# Command to start ray on worker nodes. You don't need to change this.
+worker_start_ray_commands:
+    - ray stop
+    - "sudo ulimit -n 65536; ray start --address=$RAY_HEAD_IP:6379 --object-manager-port=8076 --resources='{\"machine\": 1}'"
+
