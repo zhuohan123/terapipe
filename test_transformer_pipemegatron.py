@@ -145,7 +145,7 @@ class NCCLTransformerRunner:
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
                     self.comm.send_tensor(x, self.model_parallel_next_src_rank)
             all_batch_attn_hiddens.append(all_attn_hiddens)
-            all_batch_attn_hiddens_detached.append(all_batch_attn_hiddens_detached)
+            all_batch_attn_hiddens_detached.append(all_attn_hiddens_detached)
             all_batch_inputs.append(all_inputs)
             all_batch_outputs.append(all_outputs)
 
@@ -196,7 +196,7 @@ class NCCLTransformerRunner:
             all_attn_hiddens = all_batch_attn_hiddens[batch_id]
             all_attn_hiddens_detached = all_batch_attn_hiddens_detached[batch_id]
             all_inputs = all_batch_inputs[batch_id]
-            all_outputs = []
+            all_outputs = all_batch_outputs[batch_id]
             for input_id in reversed(range(self.n_input_slices)):
                 if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
                     dy = grad_all_batch_outputs[batch_id][input_id]
