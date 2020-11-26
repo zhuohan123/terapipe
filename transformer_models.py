@@ -178,8 +178,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
     def forward(self, x, cache=None):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
-        # TODO: figure out how to improve mem usage of contiguous() call
-        q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
+        q, k, v = self.in_proj(x).view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
         # pytorch 1.7+ doesn't allow this inplace op
         q = q * self.scaling
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
@@ -196,20 +195,16 @@ class MultiheadLMAttentionWithCache(nn.Module):
             "k": k,
             "v": v,
         }
-        
+
         attn_weights = torch.bmm(q, k.transpose_(1, 2))
-        del q
-        assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
+        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
         attn_weights += attn_mask[None, :, :]
         del attn_mask
         # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
-        del attn_weights
         attn = torch.bmm(attn_probs, v)
-        del attn_probs
         attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
         attn = self.out_proj(attn)
-
         return attn, new_cache
 
 
@@ -223,17 +218,16 @@ class TransformerLayer(nn.Module):
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
     def forward(self, x, attn_cache=None):
-        seq_len, batch_size, _ = x.size()
         y = x
         x = self.attn_ln(x)
         x, new_attn_cache = self.attn(x, attn_cache)
-        x.add_(y)
+        x += y
+
         y = x
         x = self.fc_ln(x)
-        x = self.fc1(x)
-        x = F.relu(x, inplace=True)
+        x = self.fc1(x).relu_()
         x = self.fc2(x)
-        x.add_(y)
+        x += y
         return x, new_attn_cache
 
 

@@ -10,12 +10,11 @@ from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 import mpu
 import nccl
-from utils import set_random_seed, mem_report
+from utils import set_random_seed
 from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_x,
     ModelParallelTransformerLayer,
 )
-import gc
 
 WARM_UP_ROUNDS = 5
 LOSS_SCALE_FACTOR = 128.0
@@ -221,7 +220,6 @@ class NCCLTransformerRunner:
 
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
-        print("allocated", torch.cuda.memory_allocated(), "max allocated", torch.cuda.max_memory_allocated())
 
     def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
         # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
@@ -252,9 +250,7 @@ class NCCLTransformerRunner:
         for _ in range(self.n_steps):
             start_time = time.time()
             self.step()
-            step_time = time.time() - start_time
-            gc.collect()
-            
+            step_time = time.time() - start_time            
             all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)
         if len(all_step_times) > WARM_UP_ROUNDS:
