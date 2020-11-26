@@ -6,6 +6,7 @@ from apex import optimizers
 import numpy as np
 import torch
 import torch.distributed as dist
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 import mpu
 import nccl
@@ -20,7 +21,7 @@ LOSS_SCALE_FACTOR = 128.0
 
 
 class NCCLTransformerRunner:
-    def __init__(self, config, n_slices, distributed_init_method, world_size,
+    def __init__(self, config, n_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank,
                  n_steps, mixed_precision=False, use_mpi=False):
         self.config = config
@@ -41,9 +42,11 @@ class NCCLTransformerRunner:
         self.rank = rank
         self.local_rank = local_rank
         self.world_size = world_size
+        self.data_parallel_size = data_parallel_size
         self.model_parallel_size = model_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
         self.pipeline_parallel_group_rank = mpu.get_pipeline_parallel_group_rank()
+        self.data_parallel_group = mpu.get_data_parallel_group()
         self.model_parallel_group = mpu.get_model_parallel_group()
         self.model_parallel_src_rank = mpu.get_model_parallel_src_rank()
         self.model_parallel_dst_rank = mpu.get_model_parallel_dst_rank()
@@ -204,6 +207,11 @@ class NCCLTransformerRunner:
                 master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
 
         self.optimizer.step()
+
+        if self.data_parallel_size > 1:
+            # data parallel allreduce
+            self.allreduce_params()
+
         if self.mixed_precision:
             # copy master updated FP32 parameters back to FP16
             with torch.no_grad():
@@ -212,6 +220,30 @@ class NCCLTransformerRunner:
 
         print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
         torch.cuda.synchronize()
+
+    def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
+        # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
+        buckets = {}
+        for param in self.all_parameters:
+            if param.requires_grad and param.grad is not None:
+                tp = (param.data.type())
+                if tp not in buckets:
+                    buckets[tp] = []
+                buckets[tp].append(param)
+        for tp in buckets:
+            bucket = buckets[tp]
+            grads = [param.grad.data for param in bucket]
+            coalesced = _flatten_dense_tensors(grads)
+            if fp32_allreduce:
+                coalesced = coalesced.float()
+            if not no_scale and not reduce_after:
+                coalesced /= dist.get_world_size(group=self.data_parallel_group)
+            dist.all_reduce(coalesced, group=self.data_parallel_group)
+            torch.cuda.synchronize()
+            if not no_scale and reduce_after:
+                coalesced /= dist.get_world_size(group=self.data_parallel_group)
+            for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
+                buf.copy_(synced)
 
     def run(self):
         all_step_times = []
@@ -258,11 +290,11 @@ def main():
         n_devices=args.world_size,
         model_name=args.model,
     )
-    assert args.world_size == args.model_parallel_size * args.pipeline_parallel_size, \
-        "Data parallel is not implemented yet"
+    data_parallel_size = args.world_size // (args.model_parallel_size * args.pipeline_parallel_size)
+    assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
     runner = NCCLTransformerRunner(
-        config, args.n_slices, distributed_init_method, args.world_size,
+        config, args.n_slices, distributed_init_method, args.world_size, data_parallel_size,
         args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi
