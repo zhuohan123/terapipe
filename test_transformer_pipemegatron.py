@@ -87,9 +87,9 @@ class NCCLTransformerRunner:
                 p.requires_grad_()
 
         if self.mixed_precision:
-            self.optimizer = optimizers.FusedSGD(self.master_parameters, lr=1e-10)
+            self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
         else:
-            self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
+            self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
     def step(self):
         if self.rank != 0:
