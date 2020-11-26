@@ -175,11 +175,11 @@ class NCCLTransformerRunner:
             flattened_all_batch_outputs = []
             for all_outputs in all_batch_outputs:
                 flattened_all_batch_outputs += all_outputs
-            grad_all_outputs = torch.autograd.grad(loss, flattened_all_batch_outputs)
+            flattened_grad_all_batch_outputs = torch.autograd.grad(loss, flattened_all_batch_outputs)
             grad_all_batch_outputs = []
             offset = 0
             for all_outputs in all_batch_outputs:
-                grad_all_batch_outputs.append(flattened_all_batch_outputs[offset:offset + len(all_outputs)])
+                grad_all_batch_outputs.append(flattened_grad_all_batch_outputs[offset:offset + len(all_outputs)])
                 offset += len(all_outputs)
 
             print("rank", self.rank, "finish calculating loss", flush=True)
