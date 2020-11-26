@@ -364,7 +364,7 @@ def uniform_slice_batch_and_input(x, n_batch_slices, n_input_slices):
         for j in range(n_input_slices):
             seq_len_slice = seq_len // n_input_slices + int(j < seq_len % n_input_slices)
             sliced_input.append(x[start_input_index:start_input_index + seq_len_slice,
-                                  start_batch_index:start_batch_index + batch_size_slice])
+                                  start_batch_index:start_batch_index + batch_size_slice].contigious())
             start_input_index += seq_len_slice
         assert start_input_index == seq_len
         sliced_batch.append(sliced_input)
