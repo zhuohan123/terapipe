@@ -99,23 +99,20 @@ class NCCLTransformerRunner:
     def create_placeholder(self):
         return np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
 
-    def forward_step(self, sliced_x):
+    def forward_step(self, all_batch_inputs):
         all_batch_attn_hiddens = self.create_placeholder()
         all_batch_attn_hiddens_detached = self.create_placeholder()
-        all_batch_inputs = self.create_placeholder()
         all_batch_outputs = self.create_placeholder()
 
         for batch_id in range(self.n_batch_slices):
             # forward
             attn_caches = [None] * len(self.layers)
             for input_id in range(self.n_input_slices):
-                x = sliced_x[batch_id][input_id]
+                x = all_batch_inputs[batch_id, input_id]
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
                 if self.model_parallel_size > 1:
                     dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
-                x.requires_grad_()
-                all_batch_inputs[batch_id, input_id] = x
                 new_attn_caches = []
                 for layer, attn_cache in zip(self.layers, attn_caches):
                     x, new_attn_cache = layer(x, attn_cache)
@@ -127,14 +124,14 @@ class NCCLTransformerRunner:
                 if (self.rank == self.model_parallel_dst_rank
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
                     self.comm.send_tensor(x, self.model_parallel_next_src_rank)
-        return all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached
+        return all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached
 
     def backward_step(self, sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached):
         for batch_id in reversed(range(self.n_batch_slices)):
             a = []
             da = []
             for input_id in reversed(range(self.n_input_slices)):
-                dy = sliced_grad_x[batch_id][input_id]
+                dy = sliced_grad_x[batch_id, input_id]
                 if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
                     if self.rank == self.model_parallel_dst_rank:
                         self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
@@ -156,7 +153,7 @@ class NCCLTransformerRunner:
                     else:
                         w.grad += grad_w
 
-    def step(self):
+    def create_inputs(self):
         if self.rank != 0:
             input_x = self.config.create_inputs_empty()
         else:
@@ -164,11 +161,16 @@ class NCCLTransformerRunner:
 
         if self.mixed_precision:
             input_x = input_x.half()
-
         sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
+        for batch_id in range(self.n_batch_slices):
+            for input_id in range(self.n_input_slices):
+                sliced_x[batch_id, input_id].requires_grad_(True)
+        return sliced_x
 
+    def step(self):
+        all_batch_inputs = self.create_inputs()
         start_time = time.time()
-        all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached = self.forward_step(sliced_x)
+        all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached = self.forward_step(all_batch_inputs)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
         # backward
@@ -194,6 +196,7 @@ class NCCLTransformerRunner:
             if self.mixed_precision:
                 grad_x = grad_x.half()
             sliced_grad_x = uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
+            del grad_x
 
         self.backward_step(sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached)
 
