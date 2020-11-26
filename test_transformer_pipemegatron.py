@@ -1,3 +1,7 @@
+import os
+os.environ['FI_PROVIDER']='efa'
+os.environ['FI_EFA_USE_DEVICE_RDMA']='1'
+os.environ['LD_LIBRARY_PATH']='/usr/local/cuda-11.0/efa/lib:/usr/local/cuda-11.0/lib:/usr/local/cuda-11.0/lib64:/usr/local/cuda-11.0:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib'
 import numpy as np
 import argparse
 import time
