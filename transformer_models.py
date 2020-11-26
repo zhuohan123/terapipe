@@ -194,7 +194,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
             "v": v,
         }
 
-        attn_weights = torch.bmm(q, k.transpose_(1, 2))
+        attn_weights = torch.bmm(q, k.transpose(1, 2))
         assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
         attn_weights += attn_mask[None, :, :]
         del attn_mask
