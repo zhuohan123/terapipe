@@ -216,6 +216,37 @@ class TransformerLayer(nn.Module):
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
     def forward(self, x, attn_cache=None):
+        # ==============================================
+        # Per device per layer memory usage (GPT-3 137B)
+        # ==============================================
+        #
+        # ~~~~~~~~~~~
+        # Activations
+        # ~~~~~~~~~~~
+        #
+        # C := batch_size * seqlen * hidden_size * sizeof(float16)
+        # M := Megatron-LM model parallel size
+        # 
+        # Total activation: (4 + 73 / M) C
+        # If M = 8, then the total activation is 630 MB per batch (678 MB if considering the input).
+        # attn_weights & attn_probs takes 61% of the total activation size.
+        # LayerNorm takes 15%
+        #
+        # Self-attention: (2 + 69 / M) C
+        #   LayerNorm: C
+        #   QKV_in_proj: 3C / M
+        #   Q_scale: C / M
+        #   attn_weights: 16C / M
+        #   attn_probs: 48C / M
+        #   attn: C / M
+        #   output: C
+        #
+        # Feed-forward: (2 + 4 / M) C
+        #   LayerNorm: C
+        #   FC1: 4C / M
+        #   FC2: C
+        #
+
         y = x
         x = self.attn_ln(x)
         x, new_attn_cache = self.attn(x, attn_cache)
