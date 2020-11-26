@@ -287,7 +287,7 @@ def main():
         n_devices=args.world_size,
         model_name=args.model,
     )
-    data_parallel_size = args.world_size // args.model_parallel_size * args.pipeline_parallel_size
+    data_parallel_size = args.world_size // (args.model_parallel_size * args.pipeline_parallel_size)
     assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
     runner = NCCLTransformerRunner(
