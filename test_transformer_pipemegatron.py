@@ -12,7 +12,7 @@ import mpu
 import nccl
 from utils import set_random_seed
 from transformer_models import (
-    TransformerConfig, MODEL_CONFIGS, uniform_slice_x,
+    TransformerConfig, MODEL_CONFIGS, uniform_slice_batch_and_input,
     ModelParallelTransformerLayer,
 )
 
@@ -21,12 +21,13 @@ LOSS_SCALE_FACTOR = 128.0
 
 
 class NCCLTransformerRunner:
-    def __init__(self, config, n_slices, distributed_init_method, world_size, data_parallel_size,
+    def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank,
                  n_steps, mixed_precision=False, use_mpi=False):
         self.config = config
         self.n_layers = self.config.n_layers // self.config.n_devices
-        self.n_slices = n_slices
+        self.n_batch_slices = n_batch_slices
+        self.n_input_slices = n_input_slices
         torch.cuda.set_device(local_rank)
         dist.init_process_group(
             backend='nccl',
@@ -99,42 +100,55 @@ class NCCLTransformerRunner:
             input_x = self.config.create_inputs_empty()
         else:
             input_x = self.config.create_inputs()
-        sliced_x = uniform_slice_x(input_x, self.n_slices)
 
         if self.mixed_precision:
-            sliced_x = [x.half() for x in sliced_x]
+            input_x = input_x.half()
 
-        # forward
-        attn_caches = [None] * len(self.layers)
-        all_attn_hiddens = [[]]
-        all_attn_hiddens_detached = [[]]
-        all_inputs = []
-        all_outputs = []
+        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
+
         start_time = time.time()
-        for i in range(self.n_slices):
-            x = sliced_x[i]
-            if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
-            if self.model_parallel_size > 1:
-                dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
-            x.requires_grad_()
-            all_inputs.append(x)
-            new_attn_caches_detached = []
-            attn_hiddens = []
-            attn_hiddens_detached = []
-            for layer, attn_cache in zip(self.layers, attn_caches):
-                x, new_attn_cache = layer(x, attn_cache)
-                attn_hiddens += [v for k, v in new_attn_cache.items()]
-                new_attn_cache_detached = {k: v.detach().requires_grad_() for k, v in new_attn_cache.items()}
-                attn_hiddens_detached += [v for k, v in new_attn_cache_detached.items()]
-                new_attn_caches_detached.append(new_attn_cache_detached)
-            attn_caches = new_attn_caches_detached
-            all_attn_hiddens.append(attn_hiddens)
-            all_attn_hiddens_detached.append(attn_hiddens_detached)
-            all_outputs.append(x)
-            if (self.rank == self.model_parallel_dst_rank
-                    and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
-                self.comm.send_tensor(x, self.model_parallel_next_src_rank)
+
+        all_batch_attn_hiddens = []
+        all_batch_attn_hiddens_detached = []
+        all_batch_inputs = []
+        all_batch_outputs = []
+
+        for batch_id in range(self.n_batch_slices):
+            # forward
+            attn_caches = [None] * len(self.layers)
+            all_attn_hiddens = [[]]
+            all_attn_hiddens_detached = [[]]
+            all_inputs = []
+            all_outputs = []
+            for input_id in range(self.n_input_slices):
+                x = sliced_x[batch_id][input_id]
+                if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
+                    self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
+                if self.model_parallel_size > 1:
+                    dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
+                x.requires_grad_()
+                all_inputs.append(x)
+                new_attn_caches_detached = []
+                attn_hiddens = []
+                attn_hiddens_detached = []
+                for layer, attn_cache in zip(self.layers, attn_caches):
+                    x, new_attn_cache = layer(x, attn_cache)
+                    attn_hiddens += [v for k, v in new_attn_cache.items()]
+                    new_attn_cache_detached = {k: v.detach().requires_grad_() for k, v in new_attn_cache.items()}
+                    attn_hiddens_detached += [v for k, v in new_attn_cache_detached.items()]
+                    new_attn_caches_detached.append(new_attn_cache_detached)
+                attn_caches = new_attn_caches_detached
+                all_attn_hiddens.append(attn_hiddens)
+                all_attn_hiddens_detached.append(attn_hiddens_detached)
+                all_outputs.append(x)
+                if (self.rank == self.model_parallel_dst_rank
+                        and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
+                    self.comm.send_tensor(x, self.model_parallel_next_src_rank)
+            all_batch_attn_hiddens.append(all_attn_hiddens)
+            all_batch_attn_hiddens_detached.append(all_attn_hiddens_detached)
+            all_batch_inputs.append(all_inputs)
+            all_batch_outputs.append(all_outputs)
+
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
         # backward
@@ -147,7 +161,7 @@ class NCCLTransformerRunner:
 
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
-            concated_outputs = torch.cat(all_outputs, dim=0)
+            concated_outputs = torch.cat([torch.cat(all_outputs, dim=0) for all_outputs in all_batch_outputs], dim=1)
             if self.mixed_precision:
                 # cast reductions to FP32
                 concated_outputs = concated_outputs.float()
@@ -158,43 +172,58 @@ class NCCLTransformerRunner:
             if self.mixed_precision:
                 loss = loss.float() * LOSS_SCALE_FACTOR
                 loss = loss.half()
-            grad_all_outputs = torch.autograd.grad(loss, all_outputs)
+            flattened_all_batch_outputs = []
+            for all_outputs in all_batch_outputs:
+                flattened_all_batch_outputs += all_outputs
+            flattened_grad_all_batch_outputs = torch.autograd.grad(loss, flattened_all_batch_outputs)
+            grad_all_batch_outputs = []
+            offset = 0
+            for all_outputs in all_batch_outputs:
+                grad_all_batch_outputs.append(flattened_grad_all_batch_outputs[offset:offset + len(all_outputs)])
+                offset += len(all_outputs)
+
             print("rank", self.rank, "finish calculating loss", flush=True)
 
-        a = []
-        da = []
         if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
             grad_x = self.config.create_inputs_empty()
             if self.mixed_precision:
                 grad_x = grad_x.half()
-            sliced_grad_x = uniform_slice_x(grad_x, self.n_slices)
+            sliced_grad_x = uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
 
-        for i in reversed(range(self.n_slices)):
-            if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
-                dy = grad_all_outputs[i]
-            else:
-                dy = sliced_grad_x[i]
-                if self.rank == self.model_parallel_dst_rank:
-                    self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
-                if self.model_parallel_size > 1:
-                    dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
-            y = all_outputs[i]
-            x = all_inputs[i]
-            outputs = [y] + a
-            grad_outputs = [dy] + da
-            inputs = self.all_parameters + [x] + all_attn_hiddens_detached[i]
-            all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
-            dw = all_grads[:self.n_params]
-            dx = all_grads[self.n_params]
-            da = list(all_grads[self.n_params + 1:])
-            a = all_attn_hiddens[i]
-            if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
-            for grad_w, w in zip(dw, self.all_parameters):
-                if w.grad is None:
-                    w.grad = grad_w.detach()
+        for batch_id in reversed(range(self.n_batch_slices)):
+            a = []
+            da = []
+            all_attn_hiddens = all_batch_attn_hiddens[batch_id]
+            all_attn_hiddens_detached = all_batch_attn_hiddens_detached[batch_id]
+            all_inputs = all_batch_inputs[batch_id]
+            all_outputs = all_batch_outputs[batch_id]
+            for input_id in reversed(range(self.n_input_slices)):
+                if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
+                    dy = grad_all_batch_outputs[batch_id][input_id]
                 else:
-                    w.grad += grad_w
+                    dy = sliced_grad_x[batch_id][input_id]
+                    if self.rank == self.model_parallel_dst_rank:
+                        self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
+                    if self.model_parallel_size > 1:
+                        dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
+                y = all_outputs[input_id]
+                x = all_inputs[input_id]
+                outputs = [y] + a
+                grad_outputs = [dy] + da
+                inputs = self.all_parameters + [x] + all_attn_hiddens_detached[input_id]
+                all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
+                dw = all_grads[:self.n_params]
+                dx = all_grads[self.n_params]
+                da = list(all_grads[self.n_params + 1:])
+                a = all_attn_hiddens[input_id]
+                if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
+                    self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
+                for grad_w, w in zip(dw, self.all_parameters):
+                    if w.grad is None:
+                        w.grad = grad_w.detach()
+                    else:
+                        w.grad += grad_w
+
         # copy FP16 model gradients to FP32 master before comparing/optimizing
         if self.mixed_precision:
             for model_param, master_param in zip(self.all_parameters, self.master_parameters):
@@ -271,7 +300,9 @@ def main():
     parser.add_argument('--pipeline-parallel-size', metavar='N', type=int, default=1)
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
-    parser.add_argument('--n-slices', metavar='N', type=int, default=8)
+    parser.add_argument('--batch-size', metavar='N', type=int, default=1)
+    parser.add_argument('--n-batch-slices', metavar='N', type=int, default=1)
+    parser.add_argument('--n-input-slices', metavar='N', type=int, default=1)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
@@ -283,7 +314,7 @@ def main():
         args.local_rank = int(os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'))
 
     config = TransformerConfig(
-        batch_size=1,
+        batch_size=args.batch_size,
         seq_len=1024,
         n_layers=48,
         embedding_dim=2048,
@@ -294,8 +325,8 @@ def main():
     assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
     runner = NCCLTransformerRunner(
-        config, args.n_slices, distributed_init_method, args.world_size, data_parallel_size,
-        args.model_parallel_size, args.pipeline_parallel_size,
+        config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
+        data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi
     )

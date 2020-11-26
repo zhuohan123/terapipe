@@ -353,6 +353,26 @@ def uniform_slice_x(x, n_slices):
     return sliced_x
 
 
+def uniform_slice_batch_and_input(x, n_batch_slices, n_input_slices):
+    seq_len, batch_size, _ = x.size()
+    sliced_batch = []
+    start_batch_index = 0
+    for i in range(n_batch_slices):
+        sliced_input = []
+        batch_size_slice = batch_size // n_batch_slices + int(i < batch_size % n_batch_slices)
+        start_input_index = 0
+        for j in range(n_input_slices):
+            seq_len_slice = seq_len // n_input_slices + int(j < seq_len % n_input_slices)
+            sliced_input.append(x[start_input_index:start_input_index + seq_len_slice,
+                                  start_batch_index:start_batch_index + batch_size_slice].contiguous())
+            start_input_index += seq_len_slice
+        assert start_input_index == seq_len
+        sliced_batch.append(sliced_input)
+        start_batch_index += batch_size_slice
+    assert start_batch_index == batch_size
+    return sliced_batch
+
+
 def uniform_slice_layers(transformer_layers, n_devices=None):
     n_layers = len(transformer_layers)
     n_devices = n_devices if n_devices else torch.cuda.device_count()

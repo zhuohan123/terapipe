@@ -19,7 +19,7 @@ auth:
 
 head_node:
     InstanceType: p3.16xlarge
-    ImageId: ami-05aaccd52c9e2954f # pipe-nccl-2
+    ImageId: ami-0d41417a911b04ad4 # pipe-nccl-3
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
@@ -27,7 +27,7 @@ head_node:
 
 worker_nodes:
     InstanceType: p3.16xlarge
-    ImageId: ami-05aaccd52c9e2954f # pipe-nccl-2
+    ImageId: ami-0d41417a911b04ad4 # pipe-nccl-3
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
