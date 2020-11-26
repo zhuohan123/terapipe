@@ -87,9 +87,9 @@ class NCCLTransformerRunner:
                 p.requires_grad_()
 
         if self.mixed_precision:
-            self.optimizer = optimizers.FusedSGD(self.master_parameters, lr=1e-10)
+            self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
         else:
-            self.optimizer = torch.optim.SGD(self.all_parameters, lr=1e-10)
+            self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
     def step(self):
         if self.rank != 0:
@@ -112,7 +112,8 @@ class NCCLTransformerRunner:
             x = sliced_x[i]
             if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                 self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
-            dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
+            if self.model_parallel_size > 1:
+                dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
             x.requires_grad_()
             all_inputs.append(x)
             new_attn_caches_detached = []
@@ -172,7 +173,8 @@ class NCCLTransformerRunner:
                 dy = sliced_grad_x[i]
                 if self.rank == self.model_parallel_dst_rank:
                     self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
-                dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
+                if self.model_parallel_size > 1:
+                    dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
             y = all_outputs[i]
             x = all_inputs[i]
             outputs = [y] + a
@@ -196,6 +198,7 @@ class NCCLTransformerRunner:
                 if master_param.grad is None:
                     master_param.grad = master_param.new(*master_param.size())
                 master_param.grad.copy_(model_param.grad)
+                del model_param.grad
 
                 # descale master weights
                 master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
