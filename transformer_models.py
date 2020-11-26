@@ -1,10 +1,18 @@
-import math
+from collections import namedtuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import threading
 import queue
 import mpu
+
+
+class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
+    def detach(self):
+        return AttentionCache(
+            k=self.k.detach().requires_grad_(),
+            v=self.v.detach().requires_grad_())
+
 
 # https://github.com/NVIDIA/apex/issues/93
 # since the purpose of mask is to set exp(val) to 0
@@ -77,9 +85,10 @@ class TransformerConfig:
         self.placement_orders = placement_orders or list(range(self.n_devices))
 
     @classmethod
-    def from_predefined_model(cls, model_name, n_devices=None):
+    def from_predefined_model(cls, model_name, n_devices=None, batch_size=1):
         n_layers, hidden_size, sequence_length, num_attention_heads = MODEL_CONFIGS[model_name]
         return cls(
+            batch_size=batch_size,
             seq_len=sequence_length,
             n_layers=n_layers,
             embedding_dim=hidden_size,
@@ -183,16 +192,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
         src_len = tgt_len
         if cache is not None:
             # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
-            cache_len = cache["k"].size()[1]
-            k = torch.cat([cache["k"], k], dim=1)
-            v = torch.cat([cache["v"], v], dim=1)
+            cache_len = cache.k.size()[1]
+            k = torch.cat([cache.k, k], dim=1)
+            v = torch.cat([cache.v, v], dim=1)
             attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
             src_len += cache_len
 
-        new_cache = {
-            "k": k,
-            "v": v,
-        }
+        new_cache = AttentionCache(k, v)
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
         assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
