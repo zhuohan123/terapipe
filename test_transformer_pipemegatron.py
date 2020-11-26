@@ -21,7 +21,7 @@ LOSS_SCALE_FACTOR = 128.0
 
 
 class NCCLTransformerRunner:
-    def __init__(self, config, n_slices, distributed_init_method, world_size,
+    def __init__(self, config, n_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank,
                  n_steps, mixed_precision=False, use_mpi=False):
         self.config = config
@@ -42,6 +42,7 @@ class NCCLTransformerRunner:
         self.rank = rank
         self.local_rank = local_rank
         self.world_size = world_size
+        self.data_parallel_size = data_parallel_size
         self.model_parallel_size = model_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
         self.pipeline_parallel_group_rank = mpu.get_pipeline_parallel_group_rank()
@@ -204,8 +205,9 @@ class NCCLTransformerRunner:
 
         self.optimizer.step()
 
-        # data parallel allreduce
-        self.allreduce_params()
+        if self.data_parallel_size > 1:
+            # data parallel allreduce
+            self.allreduce_params()
 
         if self.mixed_precision:
             # copy master updated FP32 parameters back to FP16
@@ -289,7 +291,7 @@ def main():
     assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
     runner = NCCLTransformerRunner(
-        config, args.n_slices, distributed_init_method, args.world_size,
+        config, args.n_slices, distributed_init_method, args.world_size, data_parallel_size,
         args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi
