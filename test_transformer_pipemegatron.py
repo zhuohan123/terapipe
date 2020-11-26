@@ -95,19 +95,7 @@ class NCCLTransformerRunner:
         else:
             self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
-    def step(self):
-        if self.rank != 0:
-            input_x = self.config.create_inputs_empty()
-        else:
-            input_x = self.config.create_inputs()
-
-        if self.mixed_precision:
-            input_x = input_x.half()
-
-        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
-
-        start_time = time.time()
-
+    def forward_step(self, sliced_x):
         all_batch_attn_hiddens = []
         all_batch_attn_hiddens_detached = []
         all_batch_inputs = []
@@ -133,9 +121,9 @@ class NCCLTransformerRunner:
                 attn_hiddens_detached = []
                 for layer, attn_cache in zip(self.layers, attn_caches):
                     x, new_attn_cache = layer(x, attn_cache)
-                    attn_hiddens += [v for k, v in new_attn_cache.items()]
+                    attn_hiddens.extend(new_attn_cache.values())
                     new_attn_cache_detached = {k: v.detach().requires_grad_() for k, v in new_attn_cache.items()}
-                    attn_hiddens_detached += [v for k, v in new_attn_cache_detached.items()]
+                    attn_hiddens_detached.extend(new_attn_cache_detached.values())
                     new_attn_caches_detached.append(new_attn_cache_detached)
                 attn_caches = new_attn_caches_detached
                 all_attn_hiddens.append(attn_hiddens)
@@ -148,17 +136,58 @@ class NCCLTransformerRunner:
             all_batch_attn_hiddens_detached.append(all_attn_hiddens_detached)
             all_batch_inputs.append(all_inputs)
             all_batch_outputs.append(all_outputs)
+        return all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached
 
+    def backward_step(self, sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached):
+        for batch_id in reversed(range(self.n_batch_slices)):
+            a = []
+            da = []
+            all_attn_hiddens = all_batch_attn_hiddens[batch_id]
+            all_attn_hiddens_detached = all_batch_attn_hiddens_detached[batch_id]
+            all_inputs = all_batch_inputs[batch_id]
+            all_outputs = all_batch_outputs[batch_id]
+            for input_id in reversed(range(self.n_input_slices)):
+                dy = sliced_grad_x[batch_id][input_id]
+                if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
+                    if self.rank == self.model_parallel_dst_rank:
+                        self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
+                    if self.model_parallel_size > 1:
+                        dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
+                y = all_outputs[input_id]
+                x = all_inputs[input_id]
+                outputs = [y] + a
+                grad_outputs = [dy] + da
+                inputs = self.all_parameters + [x] + all_attn_hiddens_detached[input_id]
+                all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
+                dw = all_grads[:self.n_params]
+                dx = all_grads[self.n_params]
+                da = list(all_grads[self.n_params + 1:])
+                a = all_attn_hiddens[input_id]
+                if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
+                    self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
+                for grad_w, w in zip(dw, self.all_parameters):
+                    if w.grad is None:
+                        w.grad = grad_w.detach()
+                    else:
+                        w.grad += grad_w
+
+    def step(self):
+        if self.rank != 0:
+            input_x = self.config.create_inputs_empty()
+        else:
+            input_x = self.config.create_inputs()
+
+        if self.mixed_precision:
+            input_x = input_x.half()
+
+        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
+
+        start_time = time.time()
+        all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached = self.forward_step(sliced_x)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
         # backward
         start_time = time.time()
-        # apex set 'set_to_none=True' by default.
-        if self.mixed_precision:
-            for layer in self.layers:
-                layer.zero_grad()
-        else:
-            self.optimizer.zero_grad()
 
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
@@ -184,46 +213,21 @@ class NCCLTransformerRunner:
                 offset += len(all_outputs)
 
             print("rank", self.rank, "finish calculating loss", flush=True)
-
-        if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
+            sliced_grad_x = grad_all_batch_outputs
+            del grad_all_batch_outputs
+            del flattened_grad_all_batch_outputs
+            del flattened_all_batch_outputs
+        else:
             grad_x = self.config.create_inputs_empty()
             if self.mixed_precision:
                 grad_x = grad_x.half()
             sliced_grad_x = uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
 
-        for batch_id in reversed(range(self.n_batch_slices)):
-            a = []
-            da = []
-            all_attn_hiddens = all_batch_attn_hiddens[batch_id]
-            all_attn_hiddens_detached = all_batch_attn_hiddens_detached[batch_id]
-            all_inputs = all_batch_inputs[batch_id]
-            all_outputs = all_batch_outputs[batch_id]
-            for input_id in reversed(range(self.n_input_slices)):
-                if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
-                    dy = grad_all_batch_outputs[batch_id][input_id]
-                else:
-                    dy = sliced_grad_x[batch_id][input_id]
-                    if self.rank == self.model_parallel_dst_rank:
-                        self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
-                    if self.model_parallel_size > 1:
-                        dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
-                y = all_outputs[input_id]
-                x = all_inputs[input_id]
-                outputs = [y] + a
-                grad_outputs = [dy] + da
-                inputs = self.all_parameters + [x] + all_attn_hiddens_detached[input_id]
-                all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
-                dw = all_grads[:self.n_params]
-                dx = all_grads[self.n_params]
-                da = list(all_grads[self.n_params + 1:])
-                a = all_attn_hiddens[input_id]
-                if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                    self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
-                for grad_w, w in zip(dw, self.all_parameters):
-                    if w.grad is None:
-                        w.grad = grad_w.detach()
-                    else:
-                        w.grad += grad_w
+        self.backward_step(sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached)
+
+        if self.data_parallel_size > 1:
+            # data parallel allreduce
+            self.allreduce_params()
 
         # copy FP16 model gradients to FP32 master before comparing/optimizing
         if self.mixed_precision:
@@ -237,10 +241,11 @@ class NCCLTransformerRunner:
                 master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
 
         self.optimizer.step()
-
-        if self.data_parallel_size > 1:
-            # data parallel allreduce
-            self.allreduce_params()
+        if self.mixed_precision:
+            # apex set 'set_to_none=True' by default and do not have such a parameter.
+            self.optimizer.zero_grad()
+        else:
+            self.optimizer.zero_grad(set_to_none=True)
 
         if self.mixed_precision:
             # copy master updated FP32 parameters back to FP16
