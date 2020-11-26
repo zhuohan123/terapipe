@@ -198,6 +198,7 @@ class NCCLTransformerRunner:
                 if master_param.grad is None:
                     master_param.grad = master_param.new(*master_param.size())
                 master_param.grad.copy_(model_param.grad)
+                del model_param.grad
 
                 # descale master weights
                 master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
