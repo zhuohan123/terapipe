@@ -1,5 +1,5 @@
 import numpy as np
-from ucx_tensor_p2p import Communicator
+from archive.ucx.ucx_tensor_p2p import Communicator
 import threading
 import queue
 import asyncio
