@@ -139,11 +139,12 @@ class NCCLTransformerRunner:
 
         # backward
         start_time = time.time()
+        # apex set 'set_to_none=True' by default.
         if self.mixed_precision:
             for layer in self.layers:
-                layer.zero_grad(set_to_none=True)
+                layer.zero_grad()
         else:
-            self.optimizer.zero_grad(set_to_none=True)
+            self.optimizer.zero_grad()
 
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
@@ -250,7 +251,7 @@ class NCCLTransformerRunner:
         for _ in range(self.n_steps):
             start_time = time.time()
             self.step()
-            step_time = time.time() - start_time            
+            step_time = time.time() - start_time
             all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)
         if len(all_step_times) > WARM_UP_ROUNDS:

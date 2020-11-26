@@ -6,8 +6,6 @@ import threading
 import queue
 import mpu
 
-torch.backends.cudnn.benchmark = True
-
 # https://github.com/NVIDIA/apex/issues/93
 # since the purpose of mask is to set exp(val) to 0
 # a large negative value serves the same purpose here
