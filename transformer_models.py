@@ -176,11 +176,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
     def forward(self, x, cache=None):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
-        q, k, v = self.in_proj(x).contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose(0, 1).chunk(3, dim=-1)
+        q, k, v = self.in_proj(x).view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
+        # pytorch 1.7+ doesn't allow this inplace op
         q = q * self.scaling
-        attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu(1)
+        attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
         src_len = tgt_len
         if cache is not None:
+            # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
             cache_len = cache["k"].size()[1]
             k = torch.cat([cache["k"], k], dim=1)
             v = torch.cat([cache["v"], v], dim=1)
@@ -193,13 +195,14 @@ class MultiheadLMAttentionWithCache(nn.Module):
         }
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
-        assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
+        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
         attn_weights += attn_mask[None, :, :]
+        del attn_mask
+        # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
         attn = torch.bmm(attn_probs, v)
-        attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, -1)
+        attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
         attn = self.out_proj(attn)
-
         return attn, new_cache
 
 
@@ -213,17 +216,47 @@ class TransformerLayer(nn.Module):
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
     def forward(self, x, attn_cache=None):
-        seq_len, batch_size, _ = x.size()
+        # ==============================================
+        # Per device per layer memory usage (GPT-3 137B)
+        # ==============================================
+        #
+        # ~~~~~~~~~~~
+        # Activations
+        # ~~~~~~~~~~~
+        #
+        # C := batch_size * seqlen * hidden_size * sizeof(float16)
+        # M := Megatron-LM model parallel size
+        # 
+        # Total activation: (4 + 73 / M) C
+        # If M = 8, then the total activation is 630 MB per batch (678 MB if considering the input).
+        # attn_weights & attn_probs takes 61% of the total activation size.
+        # LayerNorm takes 15%
+        #
+        # Self-attention: (2 + 69 / M) C
+        #   LayerNorm: C
+        #   QKV_in_proj: 3C / M
+        #   Q_scale: C / M
+        #   attn_weights: 16C / M
+        #   attn_probs: 48C / M
+        #   attn: C / M
+        #   output: C
+        #
+        # Feed-forward: (2 + 4 / M) C
+        #   LayerNorm: C
+        #   FC1: 4C / M
+        #   FC2: C
+        #
+
         y = x
         x = self.attn_ln(x)
         x, new_attn_cache = self.attn(x, attn_cache)
-        x = y + x
+        x += y
+
         y = x
         x = self.fc_ln(x)
-        x = self.fc1(x)
-        x = F.relu(x)
+        x = self.fc1(x).relu_()
         x = self.fc2(x)
-        x = y + x
+        x += y
         return x, new_attn_cache
 
 
@@ -259,6 +292,7 @@ class ModelParallelTransformerLayer(TransformerLayer):
         self.model_parallel_size = mpu.get_model_parallel_world_size()
         assert ffn_embedding_dim % self.model_parallel_size == 0
 
+        # TODO: write a custom inplace LayerNorm layer
         self.attn_ln = nn.LayerNorm(embedding_dim).to(device)
         self.attn = ModelParallelMultiheadLMAttentionWithCache(embedding_dim, num_attention_heads, device=device)
         self.fc_ln = nn.LayerNorm(embedding_dim).to(device)

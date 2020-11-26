@@ -153,6 +153,7 @@ class NCCLTransformerRunner:
 
         # backward
         start_time = time.time()
+        # apex set 'set_to_none=True' by default.
         if self.mixed_precision:
             for layer in self.layers:
                 layer.zero_grad()
