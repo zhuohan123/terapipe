@@ -241,8 +241,11 @@ class NCCLTransformerRunner:
                 master_param.grad.mul_(1. / LOSS_SCALE_FACTOR)
 
         self.optimizer.step()
-        # apex set 'set_to_none=True' by default.
-        self.optimizer.zero_grad(set_to_none=True)
+        if self.mixed_precision:
+            # apex set 'set_to_none=True' by default and do not have such a parameter.
+            self.optimizer.zero_grad()
+        else:
+            self.optimizer.zero_grad(set_to_none=True)
 
         if self.mixed_precision:
             # copy master updated FP32 parameters back to FP16
