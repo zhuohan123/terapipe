@@ -14,6 +14,9 @@ class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
             k=self.k.detach().requires_grad_(),
             v=self.v.detach().requires_grad_())
 
+    def __len__(self):
+        return int(self.k.size(1))
+
 
 # https://github.com/NVIDIA/apex/issues/93
 # since the purpose of mask is to set exp(val) to 0
@@ -190,19 +193,16 @@ class MultiheadLMAttentionWithCache(nn.Module):
         # pytorch 1.7+ doesn't allow this inplace op
         q = q * self.scaling
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
-        src_len = tgt_len
         if cache is not None:
             # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
-            cache_len = cache.k.size()[1]
             k = torch.cat([cache.k, k], dim=1)
             v = torch.cat([cache.v, v], dim=1)
-            attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
-            src_len += cache_len
+            attn_mask = torch.cat([x.new_zeros(tgt_len, len(cache)), attn_mask], dim=1)
 
         new_cache = AttentionCache(k, v)
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
-        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
+        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, len(new_cache))
         attn_weights += attn_mask[None, :, :]
         del attn_mask
         # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
