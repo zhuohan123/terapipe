@@ -112,7 +112,8 @@ class NCCLTransformerRunner:
             x = sliced_x[i]
             if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                 self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
-            dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
+            if self.model_parallel_size > 1:
+                dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
             x.requires_grad_()
             all_inputs.append(x)
             new_attn_caches_detached = []
@@ -172,7 +173,8 @@ class NCCLTransformerRunner:
                 dy = sliced_grad_x[i]
                 if self.rank == self.model_parallel_dst_rank:
                     self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
-                dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
+                if self.model_parallel_size > 1:
+                    dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
             y = all_outputs[i]
             x = all_inputs[i]
             outputs = [y] + a
