@@ -1,10 +1,22 @@
-import math
+from collections import namedtuple
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import threading
 import queue
 import mpu
+
+
+class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
+    def detach(self):
+        return AttentionCache(
+            k=self.k.detach().requires_grad_(),
+            v=self.v.detach().requires_grad_())
+
+    def __len__(self):
+        return int(self.k.size(1))
+
 
 # https://github.com/NVIDIA/apex/issues/93
 # since the purpose of mask is to set exp(val) to 0
@@ -77,9 +89,10 @@ class TransformerConfig:
         self.placement_orders = placement_orders or list(range(self.n_devices))
 
     @classmethod
-    def from_predefined_model(cls, model_name, n_devices=None):
+    def from_predefined_model(cls, model_name, n_devices=None, batch_size=1):
         n_layers, hidden_size, sequence_length, num_attention_heads = MODEL_CONFIGS[model_name]
         return cls(
+            batch_size=batch_size,
             seq_len=sequence_length,
             n_layers=n_layers,
             embedding_dim=hidden_size,
@@ -180,22 +193,16 @@ class MultiheadLMAttentionWithCache(nn.Module):
         # pytorch 1.7+ doesn't allow this inplace op
         q = q * self.scaling
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
-        src_len = tgt_len
         if cache is not None:
             # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
-            cache_len = cache["k"].size()[1]
-            k = torch.cat([cache["k"], k], dim=1)
-            v = torch.cat([cache["v"], v], dim=1)
-            attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
-            src_len += cache_len
+            k = torch.cat([cache.k, k], dim=1)
+            v = torch.cat([cache.v, v], dim=1)
+            attn_mask = torch.cat([x.new_zeros(tgt_len, len(cache)), attn_mask], dim=1)
 
-        new_cache = {
-            "k": k,
-            "v": v,
-        }
+        new_cache = AttentionCache(k, v)
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
-        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
+        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, len(new_cache))
         attn_weights += attn_mask[None, :, :]
         del attn_mask
         # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
@@ -389,19 +396,17 @@ def uniform_slice_x(x, n_slices):
 
 def uniform_slice_batch_and_input(x, n_batch_slices, n_input_slices):
     seq_len, batch_size, _ = x.size()
-    sliced_batch = []
+    sliced_batch = np.empty((n_batch_slices, n_input_slices), dtype='O')
     start_batch_index = 0
     for i in range(n_batch_slices):
-        sliced_input = []
         batch_size_slice = batch_size // n_batch_slices + int(i < batch_size % n_batch_slices)
         start_input_index = 0
         for j in range(n_input_slices):
             seq_len_slice = seq_len // n_input_slices + int(j < seq_len % n_input_slices)
-            sliced_input.append(x[start_input_index:start_input_index + seq_len_slice,
+            sliced_batch[i, j] = (x[start_input_index:start_input_index + seq_len_slice,
                                   start_batch_index:start_batch_index + batch_size_slice].contiguous())
             start_input_index += seq_len_slice
         assert start_input_index == seq_len
-        sliced_batch.append(sliced_input)
         start_batch_index += batch_size_slice
     assert start_batch_index == batch_size
     return sliced_batch
