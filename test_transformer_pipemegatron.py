@@ -107,6 +107,8 @@ class NCCLTransformerRunner:
         for batch_id in range(self.n_batch_slices):
             # forward
             attn_caches = [None] * len(self.layers)
+            all_batch_attn_hiddens[batch_id, 0] = []
+            all_batch_attn_hiddens_detached[batch_id, 0] = []
             for input_id in range(self.n_input_slices):
                 x = all_batch_inputs[batch_id, input_id]
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
@@ -117,10 +119,11 @@ class NCCLTransformerRunner:
                 for layer, attn_cache in zip(self.layers, attn_caches):
                     x, new_attn_cache = layer(x, attn_cache)
                     new_attn_caches.append(new_attn_cache)
-                attn_caches = [a.detach() for a in new_attn_caches]
+                if input_id < self.n_input_slices - 1:
+                    attn_caches = [a.detach() for a in new_attn_caches]
+                    all_batch_attn_hiddens[batch_id, input_id + 1] = list(chain.from_iterable(new_attn_caches))
+                    all_batch_attn_hiddens_detached[batch_id, input_id + 1] = list(chain.from_iterable(attn_caches))
                 all_batch_outputs[batch_id, input_id] = x
-                all_batch_attn_hiddens[batch_id, input_id] = list(chain.from_iterable(new_attn_caches))
-                all_batch_attn_hiddens_detached[batch_id, input_id] = list(chain.from_iterable(attn_caches))
                 if (self.rank == self.model_parallel_dst_rank
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
                     self.comm.send_tensor(x, self.model_parallel_next_src_rank)
