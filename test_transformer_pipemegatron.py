@@ -156,63 +156,7 @@ class NCCLTransformerRunner:
                     else:
                         w.grad += grad_w
 
-    def create_inputs(self):
-        if self.rank != 0:
-            input_x = self.config.create_inputs_empty()
-        else:
-            input_x = self.config.create_inputs()
-
-        if self.mixed_precision:
-            input_x = input_x.half()
-        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
-        for batch_id in range(self.n_batch_slices):
-            for input_id in range(self.n_input_slices):
-                sliced_x[batch_id, input_id].requires_grad_(True)
-        return sliced_x
-
-    def step(self):
-        all_batch_inputs = self.create_inputs()
-        start_time = time.time()
-        all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached = self.forward_step(all_batch_inputs)
-        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
-
-        # backward
-        start_time = time.time()
-
-        if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
-            print("rank", self.rank, "calculate loss", flush=True)
-            concated_outputs = torch.cat([torch.cat(all_outputs.tolist(), dim=0) for all_outputs in all_batch_outputs], dim=1)
-            if self.mixed_precision:
-                # cast reductions to FP32
-                concated_outputs = concated_outputs.float()
-            loss = torch.mean(concated_outputs)
-            # scale up the loss at the source for FP16, then de-scale when each
-            # worker performs step() or correctness checks
-            if self.mixed_precision:
-                loss = loss.float().mul(LOSS_SCALE_FACTOR).half()
-            sliced_grad_x = torch.autograd.grad(loss, all_batch_outputs.ravel())
-            sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
-                self.n_batch_slices, self.n_input_slices)
-            print("rank", self.rank, "finish calculating loss", flush=True)
-        else:
-            grad_x = self.config.create_inputs_empty()
-            if self.mixed_precision:
-                grad_x = grad_x.half()
-            sliced_grad_x = uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
-            del grad_x
-
-        self.backward_step(sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached)
-
-        del sliced_grad_x
-        del all_batch_inputs
-        del all_batch_outputs
-        del all_batch_attn_hiddens
-        del all_batch_attn_hiddens_detached
-
-        if self.data_parallel_size > 1:
-            # data parallel allreduce
-            self.allreduce_params()
-
+    def update_weights(self):
         # copy FP16 model gradients to FP32 master before comparing/optimizing
         if self.mixed_precision:
             for model_param, master_param in zip(self.all_parameters, self.master_parameters):
@@ -235,8 +179,42 @@ class NCCLTransformerRunner:
                 for model_param, master_param in zip(self.all_parameters, self.master_parameters):
                     model_param.copy_(master_param)
 
-        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
-        torch.cuda.synchronize()
+    def create_inputs(self):
+        if self.rank != 0:
+            input_x = self.config.create_inputs_empty()
+        else:
+            input_x = self.config.create_inputs()
+
+        if self.mixed_precision:
+            input_x = input_x.half()
+        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
+        for batch_id in range(self.n_batch_slices):
+            for input_id in range(self.n_input_slices):
+                sliced_x[batch_id, input_id].requires_grad_(True)
+        return sliced_x
+
+    def create_grad_inputs(self, all_batch_outputs):
+        if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
+            grad_x = self.config.create_inputs_empty()
+            if self.mixed_precision:
+                grad_x = grad_x.half()
+            return uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
+
+        print("rank", self.rank, "calculate loss", flush=True)
+        concated_outputs = torch.cat([torch.cat(all_outputs.tolist(), dim=0) for all_outputs in all_batch_outputs], dim=1)
+        if self.mixed_precision:
+            # cast reductions to FP32
+            concated_outputs = concated_outputs.float()
+        loss = torch.mean(concated_outputs)
+        # scale up the loss at the source for FP16, then de-scale when each
+        # worker performs step() or correctness checks
+        if self.mixed_precision:
+            loss = loss.float().mul(LOSS_SCALE_FACTOR).half()
+        sliced_grad_x = torch.autograd.grad(loss, all_batch_outputs.ravel())
+        sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
+            self.n_batch_slices, self.n_input_slices)
+        print("rank", self.rank, "finish calculating loss", flush=True)            
+        return sliced_grad_x
 
     def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
         # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
@@ -261,6 +239,36 @@ class NCCLTransformerRunner:
                 coalesced /= dist.get_world_size(group=self.data_parallel_group)
             for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
                 buf.copy_(synced)
+
+    def step(self):
+        all_batch_inputs = self.create_inputs()
+        start_time = time.time()
+        all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached = self.forward_step(all_batch_inputs)
+        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
+
+        # backward
+        start_time = time.time()
+
+        sliced_grad_x = self.create_grad_inputs(all_batch_outputs)
+
+        self.backward_step(
+            sliced_grad_x,
+            all_batch_inputs,
+            all_batch_outputs,
+            all_batch_attn_hiddens,
+            all_batch_attn_hiddens_detached)
+
+        del sliced_grad_x, all_batch_inputs, all_batch_outputs
+        del all_batch_attn_hiddens, all_batch_attn_hiddens_detached
+
+        if self.data_parallel_size > 1:
+            # data parallel allreduce
+            self.allreduce_params()
+
+        self.update_weights()
+
+        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
+        torch.cuda.synchronize()
 
     def run(self):
         all_step_times = []
