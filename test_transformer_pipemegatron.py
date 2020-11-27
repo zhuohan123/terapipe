@@ -178,7 +178,7 @@ class NCCLTransformerRunner:
 
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
-            concated_outputs = torch.cat([torch.cat(all_outputs, dim=0) for all_outputs in all_batch_outputs], dim=1)
+            concated_outputs = torch.cat([torch.cat(all_outputs.tolist(), dim=0) for all_outputs in all_batch_outputs], dim=1)
             if self.mixed_precision:
                 # cast reductions to FP32
                 concated_outputs = concated_outputs.float()
