@@ -21,12 +21,11 @@ WARM_UP_ROUNDS = 5
 LOSS_SCALE_FACTOR = 128.0
 
 
-class NCCLTransformerRunner:
+class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank,
                  n_steps, mixed_precision=False, use_mpi=False):
         self.config = config
-        self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_batch_slices = n_batch_slices
         self.n_input_slices = n_input_slices
         torch.cuda.set_device(local_rank)
@@ -200,7 +199,6 @@ class NCCLTransformerRunner:
                 grad_x = grad_x.half()
             return uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
 
-        print("rank", self.rank, "calculate loss", flush=True)
         concated_outputs = torch.cat([torch.cat(all_outputs.tolist(), dim=0) for all_outputs in all_batch_outputs], dim=1)
         if self.mixed_precision:
             # cast reductions to FP32
@@ -211,10 +209,8 @@ class NCCLTransformerRunner:
         if self.mixed_precision:
             loss = loss.float().mul(LOSS_SCALE_FACTOR).half()
         sliced_grad_x = torch.autograd.grad(loss, all_batch_outputs.ravel())
-        sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
+        return np.array(sliced_grad_x, dtype='O').reshape(
             self.n_batch_slices, self.n_input_slices)
-        print("rank", self.rank, "finish calculating loss", flush=True)            
-        return sliced_grad_x
 
     def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
         # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
@@ -240,24 +236,19 @@ class NCCLTransformerRunner:
             for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
                 buf.copy_(synced)
 
+
+class NCCLTransformerRunner(NCCLTransformer):
     def step(self):
         all_batch_inputs = self.create_inputs()
-        start_time = time.time()
         all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached = self.forward_step(all_batch_inputs)
-        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
-
-        # backward
-        start_time = time.time()
 
         sliced_grad_x = self.create_grad_inputs(all_batch_outputs)
-
         self.backward_step(
             sliced_grad_x,
             all_batch_inputs,
             all_batch_outputs,
             all_batch_attn_hiddens,
             all_batch_attn_hiddens_detached)
-
         del sliced_grad_x, all_batch_inputs, all_batch_outputs
         del all_batch_attn_hiddens, all_batch_attn_hiddens_detached
 
@@ -267,14 +258,12 @@ class NCCLTransformerRunner:
 
         self.update_weights()
 
-        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
-        torch.cuda.synchronize()
-
     def run(self):
         all_step_times = []
         for _ in range(self.n_steps):
             start_time = time.time()
             self.step()
+            torch.cuda.synchronize()
             step_time = time.time() - start_time
             all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)
