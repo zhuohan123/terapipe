@@ -140,8 +140,8 @@ class NCCLTransformerRunner:
                         self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
                     if self.model_parallel_size > 1:
                         dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
-                y = all_batch_inputs[batch_id, input_id]
-                x = all_batch_outputs[batch_id, input_id]
+                x = all_batch_inputs[batch_id, input_id]
+                y = all_batch_outputs[batch_id, input_id]
                 outputs = [y] + a
                 grad_outputs = [dy] + da
                 inputs = self.all_parameters + [x] + all_batch_attn_hiddens_detached[batch_id, input_id]
