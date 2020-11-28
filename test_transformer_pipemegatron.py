@@ -62,6 +62,13 @@ class LocalTransformer(nn.Module):
                 new_attn_caches.append(new_attn_cache)
         return x, new_attn_caches
 
+    def accumulate_gradients(self, dw):
+        for grad_w, w in zip(dw, self.all_parameters):
+            if w.grad is None:
+                w.grad = grad_w.detach()
+            else:
+                w.grad += grad_w
+
     def update_weights(self):
         # copy FP16 model gradients to FP32 master before comparing/optimizing
         if self.mixed_precision:
@@ -159,6 +166,7 @@ class NCCLTransformer:
         return all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached
 
     def backward_step(self, sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached):
+        n_params = len(self.local_transformer.all_parameters)
         for batch_id in reversed(range(self.n_batch_slices)):
             a = []
             da = []
@@ -173,17 +181,13 @@ class NCCLTransformer:
                 y = all_batch_outputs[batch_id, input_id]
                 outputs = [y] + a
                 grad_outputs = [dy] + da
-                inputs = self.all_parameters + [x] + all_batch_attn_hiddens_detached[batch_id, input_id]
+                inputs = self.local_transformer.all_parameters + [x] + all_batch_attn_hiddens_detached[batch_id, input_id]
                 all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
-                dw, dx, da = all_grads[:self.n_params], all_grads[self.n_params], list(all_grads[self.n_params + 1:])
+                dw, dx, da = all_grads[:n_params], all_grads[n_params], list(all_grads[n_params + 1:])
                 a = all_batch_attn_hiddens[batch_id, input_id]
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
-                for grad_w, w in zip(dw, self.all_parameters):
-                    if w.grad is None:
-                        w.grad = grad_w.detach()
-                    else:
-                        w.grad += grad_w
+                self.local_transformer.accumulate_gradients(dw)
 
     def create_inputs(self):
         if self.rank != 0:
