@@ -186,31 +186,35 @@ class MultiheadLMAttentionWithCache(nn.Module):
         ), "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
-    def forward(self, x, cache=None):
+    def forward(self, x, cache=None, batch_id=0, input_id=0, layer_id=0, slice_len=128):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
         q, k, v = self.in_proj(x).view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
         # pytorch 1.7+ doesn't allow this inplace op
         q = q * self.scaling
-        attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
-        if cache is not None:
-            # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
-            k = torch.cat([cache.k, k], dim=1)
-            v = torch.cat([cache.v, v], dim=1)
-            attn_mask = torch.cat([x.new_zeros(tgt_len, len(cache)), attn_mask], dim=1)
 
-        new_cache = AttentionCache(k, v)
+        k_cache = cache.k[batch_id, layer_id, input_id, batch_id, input_id * slice_len : (input_id + 1) * slice_len]
+        v_cache = cache.v[batch_id, layer_id, input_id, batch_id, input_id * slice_len : (input_id + 1) * slice_len]
+        k_cache.copy_(k)
+        v_cache.copy_(v)
+
+        attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
+        if input_id > 0:
+            attn_mask = torch.cat([x.new_zeros(tgt_len, input_id * slice_len), attn_mask], dim=1)
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
-        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, len(new_cache))
+        del k
+        del q
+        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, (input_id + 1) * slice_len)
         attn_weights += attn_mask[None, :, :]
         del attn_mask
         # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
         attn = torch.bmm(attn_probs, v)
+        del v
         attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
         attn = self.out_proj(attn)
-        return attn, new_cache
+        return attn
 
 
 class TransformerLayer(nn.Module):
@@ -222,7 +226,7 @@ class TransformerLayer(nn.Module):
         self.fc1 = nn.Linear(embedding_dim, ffn_embedding_dim).to(device)
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
-    def forward(self, x, attn_cache=None):
+    def forward(self, x, attn_cache=None, batch_id=0, input_id=0, layer_id=0, slice_len=128):
         # ==============================================
         # Per device per layer memory usage (GPT-3 137B)
         # ==============================================
@@ -256,7 +260,7 @@ class TransformerLayer(nn.Module):
 
         y = x
         x = self.attn_ln(x)
-        x, new_attn_cache = self.attn(x, attn_cache)
+        x, new_attn_cache = self.attn(x, attn_cache, batch_id=batch_id, input_id=input_id, layer_id=layer_id, slice_len=slice_len)
         x += y
 
         y = x

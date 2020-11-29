@@ -15,6 +15,7 @@ from utils import set_random_seed
 from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_batch_and_input,
     ModelParallelTransformerLayer,
+    AttentionCache
 )
 
 WARM_UP_ROUNDS = 5
@@ -99,31 +100,32 @@ class NCCLTransformerRunner:
     def create_placeholder(self):
         return np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
 
+    def create_attn_placeholder(self):
+        ret = torch.zeros(self.n_batch_slices, len(self.layers), self.n_input_slices, self.config.batch_size, self.config.seq_len, self.config.embedding_dim // self.config.num_attention_heads).cuda()
+        if self.mixed_precision:
+            ret = ret.half()
+        return ret
+
+    def create_output_placeholder(self):
+        ret = torch.zeros(self.n_batch_slices, self.n_input_slices, self.config.seq_len // self.n_input_slices, self.config.batch_size, self.config.embedding_dim)
+
     def forward_step(self, all_batch_inputs):
-        all_batch_attn_hiddens = self.create_placeholder()
-        all_batch_attn_hiddens_detached = self.create_placeholder()
-        all_batch_outputs = self.create_placeholder()
+        all_batch_attn_hiddens = AttentionCache(self.create_attn_placeholder(), self.create_attn_placeholder())
+        all_batch_attn_hiddens_detached = AttentionCache(all_batch_attn_hiddens.k.detach(), all_batch_attn_hiddens.v.detach())
+        all_batch_outputs = self.create_output_placeholder()
 
         for batch_id in range(self.n_batch_slices):
             # forward
-            attn_caches = [None] * len(self.layers)
-            all_batch_attn_hiddens[batch_id, 0] = []
-            all_batch_attn_hiddens_detached[batch_id, 0] = []
             for input_id in range(self.n_input_slices):
                 x = all_batch_inputs[batch_id, input_id]
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
                 if self.model_parallel_size > 1:
                     dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
-                new_attn_caches = []
-                for layer, attn_cache in zip(self.layers, attn_caches):
-                    x, new_attn_cache = layer(x, attn_cache)
-                    new_attn_caches.append(new_attn_cache)
-                if input_id < self.n_input_slices - 1:
-                    attn_caches = [a.detach() for a in new_attn_caches]
-                    all_batch_attn_hiddens[batch_id, input_id + 1] = list(chain.from_iterable(new_attn_caches))
-                    all_batch_attn_hiddens_detached[batch_id, input_id + 1] = list(chain.from_iterable(attn_caches))
-                all_batch_outputs[batch_id, input_id] = x
+
+                for layer_id, layer in enumerate(self.layers):
+                    x = layer(x, all_batch_attn_hiddens, batch_id=batch_id, input_id=input_id, layer_id=layer_id, slice_len=self.config.seq_len // self.n_input_slices)
+                all_batch_outputs[batch_id, input_id].copy_(x)
                 if (self.rank == self.model_parallel_dst_rank
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
                     self.comm.send_tensor(x, self.model_parallel_next_src_rank)
@@ -181,7 +183,8 @@ class NCCLTransformerRunner:
 
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
-            concated_outputs = torch.cat([torch.cat(all_outputs.tolist(), dim=0) for all_outputs in all_batch_outputs], dim=1)
+            # should return a view?
+            concated_outputs = all_batch_outputs.permute(1, 2, 0, 3, 4).reshape(self.config.seq_len, self.config.batch_size * self.n_batch_slices, self.config.embedding_dim)
             if self.mixed_precision:
                 # cast reductions to FP32
                 concated_outputs = concated_outputs.float()
@@ -190,9 +193,8 @@ class NCCLTransformerRunner:
             # worker performs step() or correctness checks
             if self.mixed_precision:
                 loss = loss.float().mul(LOSS_SCALE_FACTOR).half()
-            sliced_grad_x = torch.autograd.grad(loss, all_batch_outputs.ravel())
-            sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
-                self.n_batch_slices, self.n_input_slices)
+            sliced_grad_x = torch.autograd.grad(loss, all_batch_outputs)
+            print("sliced_grad_x shape", sliced_grad_x.size(), flush=True)
             print("rank", self.rank, "finish calculating loss", flush=True)
         else:
             grad_x = self.config.create_inputs_empty()
