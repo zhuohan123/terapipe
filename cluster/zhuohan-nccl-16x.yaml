@@ -4,9 +4,9 @@ cluster_name: model_parallel_nccl_16x
 # The minimum, maximum and initial number of workers nodes to launch in addition
 # to the head node. For this project, we do not need the autoscaling, so we
 # always set these numbers the same.
-min_workers: 1
-initial_workers: 1
-max_workers: 1
+min_workers: 0
+initial_workers: 0
+max_workers: 0
 
 provider:
     type: aws

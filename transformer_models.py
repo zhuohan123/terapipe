@@ -232,7 +232,7 @@ class TransformerLayer(nn.Module):
         self.fc1 = nn.Linear(embedding_dim, ffn_embedding_dim).to(device)
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
-    def forward(self, x, attn_cache=None):
+    def forward(self, x, full_cache=None, cache_len=0):
         # ==============================================
         # Per device per layer memory usage (GPT-3 137B)
         # ==============================================
@@ -266,7 +266,7 @@ class TransformerLayer(nn.Module):
 
         y = x
         x = self.attn_ln(x)
-        x, new_attn_cache = self.attn(x, attn_cache)
+        x, new_attn_cache = self.attn(x, full_cache, cache_len)
         x += y
 
         y = x
