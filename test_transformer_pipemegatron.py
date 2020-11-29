@@ -138,6 +138,7 @@ class NCCLTransformer:
         n_layers = (config.n_layers // pipeline_parallel_size
                     + int(rank < config.n_layers % pipeline_parallel_size))
         self.local_transformer = LocalTransformer(config, n_layers, mixed_precision)
+        self.mixed_precision = mixed_precision
 
     def create_placeholder(self):
         return np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
