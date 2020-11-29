@@ -23,6 +23,7 @@ LOSS_SCALE_FACTOR = 128.0
 
 class LocalTransformer(nn.Module):
     def __init__(self, config, n_layers, mixed_precision):
+        super().__init__()
         self.config = config
         self.n_layers = n_layers
         self.mixed_precision = mixed_precision
@@ -158,7 +159,7 @@ class NCCLTransformer:
                 attn_caches = [a.detach() for a in new_attn_caches]
                 all_batch_attn_hiddens[batch_id, input_id] = list(chain.from_iterable(new_attn_caches))
                 all_batch_attn_hiddens_detached[batch_id, input_id] = list(chain.from_iterable(attn_caches))
-                y, new_attn_caches = self.local_transformer.forward(x, attn_caches)
+                y, new_attn_caches = self.local_transformer(x, attn_caches)
                 all_batch_outputs[batch_id, input_id] = y
                 if (self.rank == self.model_parallel_dst_rank
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
