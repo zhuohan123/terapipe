@@ -193,10 +193,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
         # pytorch 1.7+ doesn't allow this inplace op
         q = q * self.scaling
 
-        k_cache = cache.k[batch_id, layer_id, input_id, batch_id, input_id * slice_len : (input_id + 1) * slice_len]
-        v_cache = cache.v[batch_id, layer_id, input_id, batch_id, input_id * slice_len : (input_id + 1) * slice_len]
+        k_cache = cache.k[batch_id, layer_id, :, input_id * slice_len : (input_id + 1) * slice_len]
+        v_cache = cache.v[batch_id, layer_id, :, input_id * slice_len : (input_id + 1) * slice_len]
         k_cache.copy_(k)
         v_cache.copy_(v)
+
+        k = cache.k[batch_id, layer_id, :, : (input_id + 1) * slice_len]
+        v = cache.v[batch_id, layer_id, :, : (input_id + 1) * slice_len]
 
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
         if input_id > 0:
