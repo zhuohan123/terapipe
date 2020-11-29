@@ -159,7 +159,7 @@ class NCCLTransformerRunner:
                     da = []
                 outputs = [y] + a
                 grad_outputs = [dy] + da
-                inputs = self.all_parameters + [x] + list(chain.from_iterable(all_cache_inputs[batch_id]))
+                inputs = self.all_parameters + [x] + list(chain.from_iterable(all_cache_inputs[batch_id, input_id]))
                 all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
                 dw, dx, dcache = all_grads[:self.n_params], all_grads[self.n_params], all_grads[self.n_params + 1:]
                 cache_len -= slice_seq_len
