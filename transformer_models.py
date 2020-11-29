@@ -263,7 +263,7 @@ class TransformerLayer(nn.Module):
 
         y = x
         x = self.attn_ln(x)
-        x, new_attn_cache = self.attn(x, attn_cache, batch_id=batch_id, input_id=input_id, layer_id=layer_id, slice_len=slice_len)
+        x = self.attn(x, attn_cache, batch_id=batch_id, input_id=input_id, layer_id=layer_id, slice_len=slice_len)
         x += y
 
         y = x
@@ -271,7 +271,7 @@ class TransformerLayer(nn.Module):
         x = self.fc1(x).relu_()
         x = self.fc2(x)
         x += y
-        return x, new_attn_cache
+        return x
 
 
 class ModelParallelMultiheadLMAttentionWithCache(MultiheadLMAttentionWithCache):

@@ -101,7 +101,7 @@ class NCCLTransformerRunner:
         return np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
 
     def create_attn_placeholder(self):
-        ret = torch.zeros(self.n_batch_slices, len(self.layers), self.config.batch_size * self.config.num_attention_heads, self.config.seq_len, self.config.embedding_dim // self.config.num_attention_heads).cuda()
+        ret = torch.zeros(self.n_batch_slices, len(self.layers), self.config.batch_size * self.config.num_attention_heads // self.model_parallel_size, self.config.seq_len, self.config.embedding_dim // self.config.num_attention_heads).cuda()
         if self.mixed_precision:
             ret = ret.half()
         return ret
