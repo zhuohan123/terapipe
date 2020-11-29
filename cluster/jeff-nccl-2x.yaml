@@ -19,7 +19,7 @@ auth:
 
 head_node:
     InstanceType: p3.2xlarge
-    ImageId: ami-088177741c838f89a
+    ImageId: ami-011641b8cc17ef0a1
     # Optional, place the security group ID here to access the EFS
     SecurityGroupIds:
         - sg-07289f2663469929a
@@ -28,7 +28,7 @@ head_node:
 
 worker_nodes:
     InstanceType: p3.2xlarge
-    ImageId: ami-088177741c838f89a
+    ImageId: ami-011641b8cc17ef0a1
     # Optional, place the security group ID here to access the EFS
     SecurityGroupIds:
         - sg-07289f2663469929a
