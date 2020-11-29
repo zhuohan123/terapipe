@@ -135,6 +135,8 @@ class NCCLTransformerRunner:
         return all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached
 
     def backward_step(self, sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached):
+        slice_len = self.config.seq_len // self.n_input_slices
+
         for batch_id in reversed(range(self.n_batch_slices)):
             a = []
             da = []
@@ -149,10 +151,10 @@ class NCCLTransformerRunner:
                 y = all_batch_outputs[batch_id, input_id]
                 outputs = [y] + a
                 grad_outputs = [dy] + da
-                inputs = self.all_parameters + [x] + all_batch_attn_hiddens_detached[batch_id, input_id]
+                inputs = self.all_parameters + [x] + all_batch_attn_hiddens_detached[batch_id, :, : (input_id + 1) * slice_len]
                 all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
                 dw, dx, da = all_grads[:self.n_params], all_grads[self.n_params], list(all_grads[self.n_params + 1:])
-                a = all_batch_attn_hiddens[batch_id, input_id]
+                a = all_batch_attn_hiddens[batch_id, :, : (input_id + 1) * slice_len]
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
                 for grad_w, w in zip(dw, self.all_parameters):
@@ -197,7 +199,7 @@ class NCCLTransformerRunner:
             if self.mixed_precision:
                 loss = loss.float().mul(LOSS_SCALE_FACTOR).half()
             sliced_grad_x = torch.autograd.grad(loss, all_batch_outputs)
-            print("sliced_grad_x shape", sliced_grad_x.size(), flush=True)
+            print("sliced_grad_x shape", len(sliced_grad_x), [a.size() for a in sliced_grad_x], flush=True)
             print("rank", self.rank, "finish calculating loss", flush=True)
         else:
             grad_x = self.config.create_inputs_empty()
