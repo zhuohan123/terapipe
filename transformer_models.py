@@ -11,8 +11,8 @@ import mpu
 class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
     def detach(self):
         return AttentionCache(
-            k=self.k.detach(),
-            v=self.v.detach()
+            k=self.k.detach().requires_grad_(),
+            v=self.v.detach().requires_grad_(),
         )
 
 
@@ -167,12 +167,12 @@ class TransformerConfig:
 
 
 class _AssignCache(torch.autograd.Function):
+    # Adapted from https://discuss.pytorch.org/t/disable-in-place-correctness-version-check-any-other-workaround/90738/4
     @staticmethod
     def forward(ctx, cache, value, start, end):
         ctx.start = start
         ctx.end = end
-        with torch.no_grad():
-            cache[:, start:end, :] = value
+        cache.data[:, start:end, :] = value
         return cache
 
     @staticmethod
@@ -260,7 +260,7 @@ class TransformerLayer(nn.Module):
         #
         # C := batch_size * seqlen * hidden_size * sizeof(float16)
         # M := Megatron-LM model parallel size
-        # 
+        #
         # Total activation: (4 + 73 / M) C
         # If M = 8, then the total activation is 630 MB per batch (678 MB if considering the input).
         # attn_weights & attn_probs takes 61% of the total activation size.
