@@ -166,6 +166,23 @@ class TransformerConfig:
         return transformer_layers, x
 
 
+class _AssignCache(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, cache, value, start, end):
+        ctx.start = start
+        ctx.end = end
+        with torch.no_grad():
+            cache[:, start:end, :] = value
+        return cache
+
+    @staticmethod
+    def backward(ctx, grad_cache):
+        return grad_cache, grad_cache[:, ctx.start:ctx.end, :], None, None
+
+
+assign_cache_ = _AssignCache.apply
+
+
 class MultiheadLMAttentionWithCache(nn.Module):
     def __init__(self, embed_dim, num_heads, bias=True, device='cpu'):
         super().__init__()
@@ -194,8 +211,8 @@ class MultiheadLMAttentionWithCache(nn.Module):
         if full_cache is not None:
             src_len = cache_len + tgt_len
             cache_k, cache_v = full_cache
-            cache_k[:, cache_len:src_len, :] = new_k
-            cache_v[:, cache_len:src_len, :] = new_v
+            assign_cache_(cache_k, new_k, cache_len, src_len)
+            assign_cache_(cache_v, new_v, cache_len, src_len)
             k = cache_k[:, :src_len, :]
             v = cache_v[:, :src_len, :]
             attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
