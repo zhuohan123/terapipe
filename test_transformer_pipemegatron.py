@@ -153,7 +153,7 @@ class NCCLTransformerRunner:
                 slice_seq_len = x.size(0)
                 if input_id < self.n_input_slices - 1:
                     a = list(chain.from_iterable(all_cache_outputs[batch_id, input_id]))
-                    da = [x[:, cache_len - slice_seq_len:cache_len] for x in chain.from_iterable(all_full_cache_grad[batch_id])]
+                    da = [x[:, cache_len - slice_seq_len:cache_len] for x in chain.from_iterable(all_full_cache_grad)]
                 else:
                     a = []
                     da = []
@@ -166,7 +166,7 @@ class NCCLTransformerRunner:
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
                 if cache_len > 0:
-                    for grad, update in zip(chain.from_iterable(all_full_cache_grad[batch_id]), dcache):
+                    for grad, update in zip(chain.from_iterable(all_full_cache_grad), dcache):
                         grad[:, :cache_len, :] += update[:, :cache_len, :]
                 for grad_w, w in zip(dw, self.all_parameters):
                     if w.grad is None:
