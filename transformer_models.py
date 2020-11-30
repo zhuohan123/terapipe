@@ -12,10 +12,8 @@ class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
     def detach(self):
         return AttentionCache(
             k=self.k.detach().requires_grad_(),
-            v=self.v.detach().requires_grad_())
-
-    def __len__(self):
-        return int(self.k.size(1))
+            v=self.v.detach().requires_grad_(),
+        )
 
 
 # https://github.com/NVIDIA/apex/issues/93
@@ -168,6 +166,23 @@ class TransformerConfig:
         return transformer_layers, x
 
 
+class _AssignCache(torch.autograd.Function):
+    # Adapted from https://discuss.pytorch.org/t/disable-in-place-correctness-version-check-any-other-workaround/90738/4
+    @staticmethod
+    def forward(ctx, cache, value, start, end):
+        ctx.start = start
+        ctx.end = end
+        cache.data[:, start:end, :] = value
+        return cache
+
+    @staticmethod
+    def backward(ctx, grad_cache):
+        return grad_cache, grad_cache[:, ctx.start:ctx.end, :], None, None
+
+
+assign_cache_ = _AssignCache.apply
+
+
 class MultiheadLMAttentionWithCache(nn.Module):
     def __init__(self, embed_dim, num_heads, bias=True, device='cpu'):
         super().__init__()
@@ -186,23 +201,29 @@ class MultiheadLMAttentionWithCache(nn.Module):
         ), "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
-    def forward(self, x, cache=None):
+    def forward(self, x, full_cache=None, cache_len=0):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
-        q, k, v = self.in_proj(x).view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
+        q, new_k, new_v = self.in_proj(x).view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
         # pytorch 1.7+ doesn't allow this inplace op
         q = q * self.scaling
         attn_mask = x.new_full((tgt_len, tgt_len), NEG_INF).triu_(1)
-        if cache is not None:
-            # cannot optimize this https://discuss.pytorch.org/t/concatenate-tensors-without-memory-copying/34609/13
-            k = torch.cat([cache.k, k], dim=1)
-            v = torch.cat([cache.v, v], dim=1)
-            attn_mask = torch.cat([x.new_zeros(tgt_len, len(cache)), attn_mask], dim=1)
-
-        new_cache = AttentionCache(k, v)
+        if full_cache is not None:
+            src_len = cache_len + tgt_len
+            cache_k, cache_v = full_cache
+            assign_cache_(cache_k, new_k, cache_len, src_len)
+            assign_cache_(cache_v, new_v, cache_len, src_len)
+            k = cache_k[:, :src_len, :]
+            v = cache_v[:, :src_len, :]
+            attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
+        else:
+            assert cache_len == 0
+            src_len = tgt_len
+            k = new_k
+            v = new_v
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
-        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, len(new_cache))
+        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
         attn_weights += attn_mask[None, :, :]
         del attn_mask
         # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
@@ -210,7 +231,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
         attn = torch.bmm(attn_probs, v)
         attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
         attn = self.out_proj(attn)
-        return attn, new_cache
+        return attn, AttentionCache(new_k, new_v)
+
+    def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
+        # self.batch_size * self.num_attention_heads, length, self.attention_heads_dim
+        k = torch.zeros(batch_size * self.num_heads, seq_len, self.head_dim, device=device, dtype=dtype)
+        v = torch.zeros(batch_size * self.num_heads, seq_len, self.head_dim, device=device, dtype=dtype)
+        return AttentionCache(k, v)
 
 
 class TransformerLayer(nn.Module):
@@ -222,7 +249,7 @@ class TransformerLayer(nn.Module):
         self.fc1 = nn.Linear(embedding_dim, ffn_embedding_dim).to(device)
         self.fc2 = nn.Linear(ffn_embedding_dim, embedding_dim).to(device)
 
-    def forward(self, x, attn_cache=None):
+    def forward(self, x, full_cache=None, cache_len=0):
         # ==============================================
         # Per device per layer memory usage (GPT-3 137B)
         # ==============================================
@@ -233,7 +260,7 @@ class TransformerLayer(nn.Module):
         #
         # C := batch_size * seqlen * hidden_size * sizeof(float16)
         # M := Megatron-LM model parallel size
-        # 
+        #
         # Total activation: (4 + 73 / M) C
         # If M = 8, then the total activation is 630 MB per batch (678 MB if considering the input).
         # attn_weights & attn_probs takes 61% of the total activation size.
@@ -256,7 +283,7 @@ class TransformerLayer(nn.Module):
 
         y = x
         x = self.attn_ln(x)
-        x, new_attn_cache = self.attn(x, attn_cache)
+        x, new_attn_cache = self.attn(x, full_cache, cache_len)
         x += y
 
         y = x

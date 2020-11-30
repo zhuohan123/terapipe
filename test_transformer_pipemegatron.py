@@ -96,43 +96,51 @@ class NCCLTransformerRunner:
         else:
             self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
-    def create_placeholder(self):
-        return np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
-
-    def forward_step(self, all_batch_inputs):
-        all_batch_attn_hiddens = self.create_placeholder()
-        all_batch_attn_hiddens_detached = self.create_placeholder()
-        all_batch_outputs = self.create_placeholder()
+    def forward_step(self, all_inputs):
+        all_cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
+        all_cache_outputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
+        all_outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
 
         for batch_id in range(self.n_batch_slices):
             # forward
-            attn_caches = [None] * len(self.layers)
-            all_batch_attn_hiddens[batch_id, 0] = []
-            all_batch_attn_hiddens_detached[batch_id, 0] = []
+            slice_batch_size = all_inputs[batch_id, 0].size(1)
+            seq_len = self.config.seq_len
+            all_full_cache = np.empty(self.n_layers, dtype='O')
+            for layer_id in range(self.n_layers):
+                all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
+                    slice_batch_size, seq_len, device='cuda',
+                    dtype=torch.float16 if self.mixed_precision else torch.float32)
+            cache_len = 0
             for input_id in range(self.n_input_slices):
-                x = all_batch_inputs[batch_id, input_id]
+                x = all_inputs[batch_id, input_id]
+                slice_seq_len = x.size(0)
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
                 if self.model_parallel_size > 1:
                     dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
-                new_attn_caches = []
-                for layer, attn_cache in zip(self.layers, attn_caches):
-                    x, new_attn_cache = layer(x, attn_cache)
-                    new_attn_caches.append(new_attn_cache)
-                if input_id < self.n_input_slices - 1:
-                    attn_caches = [a.detach() for a in new_attn_caches]
-                    all_batch_attn_hiddens[batch_id, input_id + 1] = list(chain.from_iterable(new_attn_caches))
-                    all_batch_attn_hiddens_detached[batch_id, input_id + 1] = list(chain.from_iterable(attn_caches))
-                all_batch_outputs[batch_id, input_id] = x
+                for layer_id in range(self.n_layers):
+                    cache_input = all_full_cache[layer_id].detach()
+                    all_full_cache[layer_id] = cache_input
+                    all_cache_inputs[batch_id, input_id, layer_id] = cache_input
+                    x, cache_output = self.layers[layer_id](x, cache_input, cache_len)
+                    all_cache_outputs[batch_id, input_id, layer_id] = cache_output
+                all_outputs[batch_id, input_id] = x
+                cache_len += slice_seq_len
                 if (self.rank == self.model_parallel_dst_rank
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
                     self.comm.send_tensor(x, self.model_parallel_next_src_rank)
-        return all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached
+        return all_outputs, all_cache_inputs, all_cache_outputs
 
-    def backward_step(self, sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached):
+    def backward_step(self, sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs):
         for batch_id in reversed(range(self.n_batch_slices)):
-            a = []
-            da = []
+            all_full_cache_grad = np.empty(self.n_layers, dtype='O')
+            slice_batch_size = all_inputs[batch_id, 0].size(1)
+            seq_len = self.config.seq_len
+            for layer_id in range(self.n_layers):
+                all_full_cache_grad[layer_id] = self.layers[layer_id].attn.create_attn_cache(
+                    slice_batch_size, seq_len, device='cuda',
+                    dtype=torch.float16 if self.mixed_precision else torch.float32)
+            cache_len = seq_len
             for input_id in reversed(range(self.n_input_slices)):
                 dy = sliced_grad_x[batch_id, input_id]
                 if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
@@ -140,16 +148,26 @@ class NCCLTransformerRunner:
                         self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
                     if self.model_parallel_size > 1:
                         dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
-                x = all_batch_inputs[batch_id, input_id]
-                y = all_batch_outputs[batch_id, input_id]
+                x = all_inputs[batch_id, input_id]
+                y = all_outputs[batch_id, input_id]
+                slice_seq_len = x.size(0)
+                if input_id < self.n_input_slices - 1:
+                    a = list(chain.from_iterable(all_cache_outputs[batch_id, input_id]))
+                    da = [x[:, cache_len - slice_seq_len:cache_len] for x in chain.from_iterable(all_full_cache_grad)]
+                else:
+                    a = []
+                    da = []
                 outputs = [y] + a
                 grad_outputs = [dy] + da
-                inputs = self.all_parameters + [x] + all_batch_attn_hiddens_detached[batch_id, input_id]
+                inputs = self.all_parameters + [x] + list(chain.from_iterable(all_cache_inputs[batch_id, input_id]))
                 all_grads = torch.autograd.grad(outputs, inputs, grad_outputs)
-                dw, dx, da = all_grads[:self.n_params], all_grads[self.n_params], list(all_grads[self.n_params + 1:])
-                a = all_batch_attn_hiddens[batch_id, input_id]
+                dw, dx, dcache = all_grads[:self.n_params], all_grads[self.n_params], all_grads[self.n_params + 1:]
+                cache_len -= slice_seq_len
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
+                if cache_len > 0:
+                    for grad, update in zip(chain.from_iterable(all_full_cache_grad), dcache):
+                        grad[:, :cache_len, :] += update[:, :cache_len, :]
                 for grad_w, w in zip(dw, self.all_parameters):
                     if w.grad is None:
                         w.grad = grad_w.detach()
@@ -171,9 +189,9 @@ class NCCLTransformerRunner:
         return sliced_x
 
     def step(self):
-        all_batch_inputs = self.create_inputs()
+        all_inputs = self.create_inputs()
         start_time = time.time()
-        all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached = self.forward_step(all_batch_inputs)
+        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
         print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
 
         # backward
@@ -181,7 +199,7 @@ class NCCLTransformerRunner:
 
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
-            concated_outputs = torch.cat([torch.cat(all_outputs.tolist(), dim=0) for all_outputs in all_batch_outputs], dim=1)
+            concated_outputs = torch.cat([torch.cat(batch_outputs.tolist(), dim=0) for batch_outputs in all_outputs], dim=1)
             if self.mixed_precision:
                 # cast reductions to FP32
                 concated_outputs = concated_outputs.float()
@@ -190,7 +208,7 @@ class NCCLTransformerRunner:
             # worker performs step() or correctness checks
             if self.mixed_precision:
                 loss = loss.float().mul(LOSS_SCALE_FACTOR).half()
-            sliced_grad_x = torch.autograd.grad(loss, all_batch_outputs.ravel())
+            sliced_grad_x = torch.autograd.grad(loss, all_outputs.ravel())
             sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
                 self.n_batch_slices, self.n_input_slices)
             print("rank", self.rank, "finish calculating loss", flush=True)
@@ -201,13 +219,13 @@ class NCCLTransformerRunner:
             sliced_grad_x = uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
             del grad_x
 
-        self.backward_step(sliced_grad_x, all_batch_inputs, all_batch_outputs, all_batch_attn_hiddens, all_batch_attn_hiddens_detached)
+        self.backward_step(sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs)
 
         del sliced_grad_x
-        del all_batch_inputs
-        del all_batch_outputs
-        del all_batch_attn_hiddens
-        del all_batch_attn_hiddens_detached
+        del all_inputs
+        del all_outputs
+        del all_cache_inputs
+        del all_cache_outputs
 
         if self.data_parallel_size > 1:
             # data parallel allreduce
