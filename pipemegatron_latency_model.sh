@@ -11,7 +11,7 @@ N_STEPS=$3
 EXTRA_ARGS=$4
 
 PYTHON_EXEC=$(which python)
-PYTHON_SCRIPT=$(realpath -s model_latency_decomposition_megatron.py)
+PYTHON_SCRIPT=$(realpath -s pipemegatron_latency_model.py)
 ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/scripts/load_cluster_env.sh
 
