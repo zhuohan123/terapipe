@@ -10,13 +10,14 @@ from transformer_models import TransformerConfig, MODEL_CONFIGS
 
 
 class TerapipeLatencyModel(NCCLTransformer):
-    def step(self, seqlen):
+    def step(self, seqlen, attn_cache_len):
+        self.config.seq_len = seqlen
         all_inputs = self.create_inputs()
         torch.cuda.synchronize()
 
         # forward
         start = time.time()
-        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
+        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs, attn_cache_len)
         py_forward_time = time.time() - start
         torch.cuda.synchronize()
         forward_time = time.time() - start

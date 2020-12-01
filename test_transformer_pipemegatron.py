@@ -277,9 +277,9 @@ class NCCLTransformerRunner(NCCLTransformer):
 
         self.update_weights()
 
-    def run(self):
+    def run(self, n_steps):
         all_step_times = []
-        for _ in range(self.n_steps):
+        for _ in range(n_steps):
             start_time = time.time()
             self.step()
             torch.cuda.synchronize()
@@ -382,12 +382,12 @@ def main():
         config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
         data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-        use_mpi=args.use_mpi, n_steps=args.n_steps, 
+        use_mpi=args.use_mpi, 
     )
     if args.verify:
         runner.verify()
     else:
-        runner.run()
+        runner.run(args.n_steps)
 
 
 if __name__ == "__main__":
