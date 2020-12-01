@@ -57,7 +57,8 @@ class LocalTransformer(nn.Module):
             all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
                 slice_batch_size, seq_len, device='cuda',
                 dtype=torch.float16 if self.mixed_precision else torch.float32)
-    
+        return all_full_cache
+
     def accumulate_grads(self, dw):
         for grad_w, w in zip(dw, self.all_parameters):
             if w.grad is None:
