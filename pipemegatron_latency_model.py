@@ -1,10 +1,12 @@
 import argparse
+import json
 import os
 import time
 
 import numpy as np
 import torch
-from mpi4py import MPI
+import tqdm
+
 from test_transformer_pipemegatron import NCCLTransformer
 from transformer_models import TransformerConfig, MODEL_CONFIGS
 
@@ -48,7 +50,7 @@ class TerapipeLatencyModel(NCCLTransformer):
 
         return py_forward_time, forward_time, py_backward_time, backward_time, update_time
 
-    def run(self, seqlen, n_steps, warmup_steps):
+    def run(self, seqlen, attn_cache_len, n_steps, warmup_steps):
         py_forward_durations = []
         forward_durations = []
         py_backward_durations = []
@@ -56,8 +58,8 @@ class TerapipeLatencyModel(NCCLTransformer):
         update_durations = []
 
         for _ in range(n_steps + warmup_steps):
-            MPI.COMM_WORLD.Barrier()
-            py_forward_time, forward_time, py_backward_time, backward_time, update_time = self.step(seqlen)
+            py_forward_time, forward_time, py_backward_time, backward_time, update_time = \
+                self.step(seqlen, attn_cache_len)
             py_forward_durations.append(py_forward_time)
             forward_durations.append(forward_time)
             py_backward_durations.append(py_backward_time)
@@ -125,9 +127,19 @@ def main():
         args.rank, args.local_rank, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi
     )
+    full_seqlen = config.seq_len
+    results = []
+    for attn_cache_len in tqdm.tqdm(range(0, full_seqlen, 64)):
+        r = runner.step(full_seqlen, attn_cache_len)
+        results.append(r)
 
+    for seqlen in tqdm.tqdm(range(0, full_seqlen + 1, 16)):
+        r = runner.step(seqlen, 0)
+        results.append(r)
 
-# for seqlen in [1, 2, 4, 8, 12, 16, 24, 32, 64] + list(range(128, 2049, 128)):
+    with open(f'{args.model}.latency_model.json', 'w') as f:
+        json.dump(results, f)
+
 
 if __name__ == "__main__":
     main()
