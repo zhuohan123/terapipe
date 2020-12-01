@@ -210,7 +210,6 @@ class NCCLTransformer(LocalTransformer):
 
     def prepare_grad_x(self, all_outputs):
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
-            print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat([torch.cat(batch_outputs.tolist(), dim=0) for batch_outputs in all_outputs], dim=1)
             if self.mixed_precision:
                 # cast reductions to FP32
@@ -223,7 +222,6 @@ class NCCLTransformer(LocalTransformer):
             sliced_grad_x = torch.autograd.grad(loss, all_outputs.ravel())
             sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
                 self.n_batch_slices, self.n_input_slices)
-            print("rank", self.rank, "finish calculating loss", flush=True)
         else:
             grad_x = self.config.create_inputs_empty()
             if self.mixed_precision:
