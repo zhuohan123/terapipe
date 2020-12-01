@@ -211,8 +211,8 @@ class MultiheadLMAttentionWithCache(nn.Module):
         if full_cache is not None:
             src_len = cache_len + tgt_len
             cache_k, cache_v = full_cache
-            assign_cache_(cache_k, new_k, cache_len, src_len)
-            assign_cache_(cache_v, new_v, cache_len, src_len)
+            cache_k = assign_cache_(cache_k, new_k, cache_len, src_len)
+            cache_v = assign_cache_(cache_v, new_v, cache_len, src_len)
             k = cache_k[:, :src_len, :]
             v = cache_v[:, :src_len, :]
             attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
