@@ -12,8 +12,7 @@ from transformer_models import TransformerConfig, MODEL_CONFIGS
 
 
 class TerapipeLatencyModel(NCCLTransformer):
-    def step(self, seqlen, attn_cache_len):
-        self.config.seq_len = seqlen
+    def step(self, attn_cache_len):
         all_inputs = self.create_inputs()
         torch.cuda.synchronize()
 
@@ -51,6 +50,8 @@ class TerapipeLatencyModel(NCCLTransformer):
         return py_forward_time, forward_time, py_backward_time, backward_time, update_time
 
     def run(self, seqlen, attn_cache_len, n_steps, warmup_steps):
+        self.config.seq_len = seqlen
+
         py_forward_durations = []
         forward_durations = []
         py_backward_durations = []
@@ -129,12 +130,12 @@ def main():
     )
     full_seqlen = config.seq_len
     results = []
-    for attn_cache_len in tqdm.tqdm(range(0, full_seqlen, 64)):
-        r = runner.step(full_seqlen, attn_cache_len)
+    for attn_cache_len in tqdm.tqdm(range(64, full_seqlen, 64)):
+        r = runner.run(full_seqlen, attn_cache_len)
         results.append(r)
 
-    for seqlen in tqdm.tqdm(range(0, full_seqlen + 1, 16)):
-        r = runner.step(seqlen, 0)
+    for seqlen in tqdm.tqdm(range(16, full_seqlen + 1, 16)):
+        r = runner.run(seqlen, 0)
         results.append(r)
 
     with open(f'{args.model}.latency_model.json', 'w') as f:
