@@ -50,6 +50,7 @@ class TerapipeLatencyModel(NCCLTransformer):
         return py_forward_time, forward_time, py_backward_time, backward_time, update_time
 
     def run(self, seqlen, attn_cache_len, n_steps, warmup_steps):
+        # overwrite the original seqlen
         self.config.seq_len = seqlen
 
         py_forward_durations = []
@@ -60,7 +61,7 @@ class TerapipeLatencyModel(NCCLTransformer):
 
         for _ in range(n_steps + warmup_steps):
             py_forward_time, forward_time, py_backward_time, backward_time, update_time = \
-                self.step(seqlen, attn_cache_len)
+                self.step(attn_cache_len)
             py_forward_durations.append(py_forward_time)
             forward_durations.append(forward_time)
             py_backward_durations.append(py_backward_time)
