@@ -188,15 +188,7 @@ class NCCLTransformerRunner:
                 sliced_x[batch_id, input_id].requires_grad_(True)
         return sliced_x
 
-    def step(self):
-        all_inputs = self.create_inputs()
-        start_time = time.time()
-        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
-        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
-
-        # backward
-        start_time = time.time()
-
+    def prepare_grad_x(self, all_outputs):
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
             print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat([torch.cat(batch_outputs.tolist(), dim=0) for batch_outputs in all_outputs], dim=1)
@@ -218,7 +210,18 @@ class NCCLTransformerRunner:
                 grad_x = grad_x.half()
             sliced_grad_x = uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
             del grad_x
+        return sliced_grad_x
 
+    def step(self):
+        all_inputs = self.create_inputs()
+        start_time = time.time()
+        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
+        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
+
+        # backward
+        start_time = time.time()
+
+        sliced_grad_x = self.prepare_grad_x(all_outputs)
         self.backward_step(sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs)
 
         del sliced_grad_x
@@ -294,6 +297,59 @@ class NCCLTransformerRunner:
                   "step_time_std:", np.std(all_step_times[WARM_UP_ROUNDS:]),
                   flush=True)
 
+    def verify_step(self, all_inputs):
+        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
+        sliced_grad_x = self.prepare_grad_x(all_outputs)
+        self.backward_step(sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs)
+
+        del sliced_grad_x
+        del all_inputs
+        del all_outputs
+        del all_cache_inputs
+        del all_cache_outputs
+
+        if self.data_parallel_size > 1:
+            # data parallel allreduce
+            self.allreduce_params()
+
+        # copy FP16 model gradients to FP32 master before comparing/optimizing
+        if self.mixed_precision:
+            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                if master_param.grad is None:
+                    master_param.grad = master_param.new(*master_param.size())
+                # descale master weights
+                master_param.grad.copy_(model_param.grad).mul_(1. / LOSS_SCALE_FACTOR)
+                del model_param.grad
+            return [master_param.grad.detach().clone() for master_param in self.master_parameters]
+        else:
+            return [param.grad.detach().clone() for param in self.all_parameters]
+
+    def verify(self):
+        if self.rank != 0:
+            input_x = self.config.create_inputs_empty()
+        else:
+            input_x = self.config.create_inputs()
+
+        if self.mixed_precision:
+            input_x = input_x.half()
+        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
+        for batch_id in range(self.n_batch_slices):
+            for input_id in range(self.n_input_slices):
+                sliced_x[batch_id, input_id].requires_grad_(True)
+        grad_list1 = self.verify_step(sliced_x)
+        if self.mixed_precision:
+            self.optimizer.zero_grad()
+        else:
+            self.optimizer.zero_grad(set_to_none=True)
+        self.n_batch_slices = 1
+        self.n_input_slices = 1
+        sliced_x = uniform_slice_batch_and_input(input_x.clone(), self.n_batch_slices, self.n_input_slices)
+        for batch_id in range(self.n_batch_slices):
+            for input_id in range(self.n_input_slices):
+                sliced_x[batch_id, input_id].requires_grad_(True)
+        grad_list2 = self.verify_step(sliced_x)
+        print(grad_list1, grad_list2)
+
 
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM')
@@ -312,6 +368,7 @@ def main():
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
+    parser.add_argument('--verify', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -331,7 +388,10 @@ def main():
         args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi
     )
-    runner.run()
+    if args.verify:
+        runner.verify()
+    else:
+        runner.run()
 
 
 if __name__ == "__main__":
