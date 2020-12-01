@@ -101,7 +101,7 @@ def main():
     parser.add_argument('--model-parallel-size', metavar='N', type=int, default=8)
     parser.add_argument('--batch-size', metavar='N', type=int, default=1)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
-    parser.add_argument('--warmup-steps', metavar='N', type=int, default=10)
+    parser.add_argument('--warmup-steps', metavar='N', type=int, default=5)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
 
@@ -131,11 +131,11 @@ def main():
     full_seqlen = config.seq_len
     results = []
     for attn_cache_len in tqdm.tqdm(range(64, full_seqlen, 64)):
-        r = runner.run(full_seqlen, attn_cache_len)
+        r = runner.run(full_seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
         results.append(r)
 
     for seqlen in tqdm.tqdm(range(16, full_seqlen + 1, 16)):
-        r = runner.run(seqlen, 0)
+        r = runner.run(seqlen, 0, args.n_steps, args.warmup_steps)
         results.append(r)
 
     with open(f'{args.model}.latency_model.json', 'w') as f:
