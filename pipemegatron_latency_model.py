@@ -89,7 +89,7 @@ class TerapipeLatencyModel(NCCLTransformer):
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM')
     parser.add_argument('ip_address', type=str, help='the IP address of the head node')
-    parser.add_argument('-p', '--port', type=int, help='the port of the head node')
+    parser.add_argument('--port', type=int, help='the port of the head node')
     parser.add_argument('--rank', metavar='I', type=int, default=0)
     parser.add_argument('--local-rank', metavar='I', type=int, default=0)
     parser.add_argument('--world-size', metavar='N', type=int, default=1)
@@ -97,6 +97,7 @@ def main():
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
 
+    parser.add_argument('--model-parallel-size', metavar='N', type=int, default=8)
     parser.add_argument('--batch-size', metavar='N', type=int, default=1)
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--warmup-steps', metavar='N', type=int, default=10)
@@ -106,7 +107,6 @@ def main():
     # These are fixed during the measurement.
     parser.add_argument('--n-batch-slices', metavar='N', type=int, default=1)
     parser.add_argument('--n-input-slices', metavar='N', type=int, default=1)
-    parser.add_argument('--model-parallel-size', metavar='N', type=int, default=1)
     parser.add_argument('--pipeline-parallel-size', metavar='N', type=int, default=1)
 
     args = parser.parse_args()
