@@ -348,7 +348,8 @@ class NCCLTransformerRunner:
             for input_id in range(self.n_input_slices):
                 sliced_x[batch_id, input_id].requires_grad_(True)
         grad_list2 = self.verify_step(sliced_x)
-        print(grad_list1, grad_list2)
+        for grad1, grad2 in zip(grad_list1, grad_list2):
+            print(torch.abs(grad1 - grad2).mean(), grad1.size())
 
 
 def main():
