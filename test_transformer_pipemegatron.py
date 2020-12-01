@@ -18,7 +18,6 @@ from transformer_models import (
     ModelParallelTransformerLayer,
 )
 
-WARM_UP_ROUNDS = 5
 LOSS_SCALE_FACTOR = 128.0
 
 
@@ -278,7 +277,7 @@ class NCCLTransformerRunner(NCCLTransformer):
 
         self.update_weights()
 
-    def run(self, n_steps):
+    def run(self, n_steps, warmup_steps=5):
         all_step_times = []
         for _ in range(n_steps):
             start_time = time.time()
@@ -287,10 +286,10 @@ class NCCLTransformerRunner(NCCLTransformer):
             step_time = time.time() - start_time
             all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)
-        if len(all_step_times) > WARM_UP_ROUNDS:
+        if len(all_step_times) > warmup_steps:
             print("rank", self.rank,
-                  "step_time_mean:", np.mean(all_step_times[WARM_UP_ROUNDS:]),
-                  "step_time_std:", np.std(all_step_times[WARM_UP_ROUNDS:]),
+                  "step_time_mean:", np.mean(all_step_times[warmup_steps:]),
+                  "step_time_std:", np.std(all_step_times[warmup_steps:]),
                   flush=True)
 
     def verify_step(self, all_inputs):
