@@ -21,75 +21,7 @@ from transformer_models import (
 LOSS_SCALE_FACTOR = 128.0
 
 
-class LocalTransformer(nn.Module):
-    def __init__(self, config, n_layers, mixed_precision):
-        super().__init__()
-        self.config = config
-        self.n_layers = n_layers
-        self.mixed_precision = mixed_precision
-
-        self.layers = nn.ModuleList()
-        for _ in range(self.n_layers):
-            l = ModelParallelTransformerLayer(
-                config.embedding_dim,
-                config.ffn_embedding_dim,
-                config.num_attention_heads,
-                device="cuda",
-            )
-            self.layers.append(l.half() if mixed_precision else l)
-
-        self.all_parameters = list(self.parameters())
-        self.n_params = len(self.all_parameters)
-
-        if self.mixed_precision:
-            self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
-            for p in self.master_parameters:
-                p.requires_grad_()
-            self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
-        else:
-            self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
-
-    def create_attention_cache(self, slice_batch_size, initial_cache_len=0):
-        seq_len = self.config.seq_len
-        all_full_cache = np.empty(self.n_layers, dtype='O')
-        for layer_id in range(self.n_layers):
-            all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
-                slice_batch_size, seq_len + initial_cache_len, device='cuda',
-                dtype=torch.float16 if self.mixed_precision else torch.float32)
-        return all_full_cache
-
-    def accumulate_grads(self, dw):
-        for grad_w, w in zip(dw, self.all_parameters):
-            if w.grad is None:
-                w.grad = grad_w.detach()
-            else:
-                w.grad += grad_w
-
-    def update_weights(self):
-        # copy FP16 model gradients to FP32 master before comparing/optimizing
-        if self.mixed_precision:
-            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
-                if master_param.grad is None:
-                    master_param.grad = master_param.new(*master_param.size())
-                # descale master weights
-                master_param.grad.copy_(model_param.grad).mul_(1. / LOSS_SCALE_FACTOR)
-                del model_param.grad
-
-        self.optimizer.step()
-        if self.mixed_precision:
-            # apex set 'set_to_none=True' by default and do not have such a parameter.
-            self.optimizer.zero_grad()
-        else:
-            self.optimizer.zero_grad(set_to_none=True)
-
-        if self.mixed_precision:
-            # copy master updated FP32 parameters back to FP16
-            with torch.no_grad():
-                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
-                    model_param.copy_(master_param)
-
-
-class NCCLTransformer(LocalTransformer):
+class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False):
         self.config = config
@@ -128,7 +60,32 @@ class NCCLTransformer(LocalTransformer):
 
         n_layers = (config.n_layers // pipeline_parallel_size
                     + int(rank < config.n_layers % pipeline_parallel_size))
-        super().__init__(config, n_layers, mixed_precision)
+        self.config = config
+        self.n_layers = n_layers
+        self.mixed_precision = mixed_precision
+
+        self.layers = []
+        for _ in range(self.n_layers):
+            l = ModelParallelTransformerLayer(
+                config.embedding_dim,
+                config.ffn_embedding_dim,
+                config.num_attention_heads,
+                device="cuda",
+            )
+            self.layers.append(l.half() if mixed_precision else l)
+
+        self.all_parameters = []
+        for layer in self.layers:
+            self.all_parameters.extend(layer.parameters())
+        self.n_params = len(self.all_parameters)
+
+        if self.mixed_precision:
+            self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
+            for p in self.master_parameters:
+                p.requires_grad_()
+            self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
+        else:
+            self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
     def forward_step(self, all_inputs, initial_cache_len=0):
         all_cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
@@ -192,7 +149,11 @@ class NCCLTransformer(LocalTransformer):
                 if cache_len > 0:
                     for grad, update in zip(chain.from_iterable(all_full_cache_grad), dcache):
                         grad[:, :cache_len, :] += update[:, :cache_len, :]
-                self.accumulate_grads(dw)
+                for grad_w, w in zip(dw, self.all_parameters):
+                    if w.grad is None:
+                        w.grad = grad_w.detach()
+                    else:
+                        w.grad += grad_w
 
     def create_inputs(self):
         if self.rank != 0:
@@ -230,6 +191,15 @@ class NCCLTransformer(LocalTransformer):
             del grad_x
         return sliced_grad_x
 
+    def create_attention_cache(self, slice_batch_size, initial_cache_len=0):
+        seq_len = self.config.seq_len
+        all_full_cache = np.empty(self.n_layers, dtype='O')
+        for layer_id in range(self.n_layers):
+            all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
+                slice_batch_size, seq_len + initial_cache_len, device='cuda',
+                dtype=torch.float16 if self.mixed_precision else torch.float32)
+        return all_full_cache
+
     def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
         # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
         buckets = {}
@@ -253,6 +223,29 @@ class NCCLTransformer(LocalTransformer):
                 coalesced /= dist.get_world_size(group=self.data_parallel_group)
             for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
                 buf.copy_(synced)
+
+    def update_weights(self):
+        # copy FP16 model gradients to FP32 master before comparing/optimizing
+        if self.mixed_precision:
+            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                if master_param.grad is None:
+                    master_param.grad = master_param.new(*master_param.size())
+                # descale master weights
+                master_param.grad.copy_(model_param.grad).mul_(1. / LOSS_SCALE_FACTOR)
+                del model_param.grad
+
+        self.optimizer.step()
+        if self.mixed_precision:
+            # apex set 'set_to_none=True' by default and do not have such a parameter.
+            self.optimizer.zero_grad()
+        else:
+            self.optimizer.zero_grad(set_to_none=True)
+
+        if self.mixed_precision:
+            # copy master updated FP32 parameters back to FP16
+            with torch.no_grad():
+                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                    model_param.copy_(master_param)
 
 
 class NCCLTransformerRunner(NCCLTransformer):
