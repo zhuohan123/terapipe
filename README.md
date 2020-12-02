@@ -38,6 +38,26 @@ EXTRA_ARGS="--mixed-precision"
 ./mpirun_pipemegatron.sh $N_NODES $N_GPUS $MODEL_PARALLEL_SIZE $PIPELINE_PARALLEL_SIZE $MODEL $N_SLICES $N_STEPS $EXTRA_ARGS
 ```
 
+# Latency Model
+
+## Single Layer
+
+First, run the following script to collect data:
+
+```bash
+./pipemegatron_latency_model.sh 8 gpt3-175b 10 --mixed-precision
+```
+
+This will create `{model_name}.latency_model.*.json` files under your current directory.
+
+Then use `fit_single_layer_model(model_name)` in `latency_model.py` to get the prediction. For example,
+
+```python
+import latency_model
+single_layer_latency_model = fit_single_layer_model('gpt3-175b')
+predict_latency = single_layer_latency_model(128, 32)
+```
+
 ## Useful scripts:
 
 Get the IPs of all the worker nodes in the cluster:
