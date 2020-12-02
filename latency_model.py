@@ -20,7 +20,7 @@ class SingleLayerLatency:
         assert seqlen % 8 == 0
         f_and_b_time = self.f_plus_b_array[seqlen // 8]
         update_time = self.update_array[seqlen // 8]
-        attn_time = self.attn_cache_linear_model.predict([[seqlen, attn_cache_len, seqlen * attn_cache_len]])
+        attn_time = self.attn_cache_linear_model.predict([[seqlen, attn_cache_len, seqlen * attn_cache_len]])[0]
         return f_and_b_time + update_time + attn_time
 
 
