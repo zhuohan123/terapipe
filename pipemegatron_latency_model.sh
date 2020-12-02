@@ -6,13 +6,12 @@ if [ "$#" -gt 4 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many argum
 N_NODES=1
 N_GPUS=$1 # per node
 MODEL_PARALLEL_SIZE=$N_GPUS
-PIPELINE_PARALLEL_SIZE=1
 MODEL=$2
 N_STEPS=$3
 EXTRA_ARGS=$4
 
 PYTHON_EXEC=$(which python)
-PYTHON_SCRIPT=$(realpath -s model_latency_decomposition_megatron.py)
+PYTHON_SCRIPT=$(realpath -s pipemegatron_latency_model.py)
 ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/scripts/load_cluster_env.sh
 
@@ -26,9 +25,8 @@ all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')
 mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
     --map-by ppr:$N_GPUS:node --oversubscribe -H $all_hosts \
         ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
-        $MY_IPADDR -p 7777 \
+        $MY_IPADDR --port 7777 \
         --model-parallel-size ${MODEL_PARALLEL_SIZE} \
-        --pipeline-parallel-size ${PIPELINE_PARALLEL_SIZE} \
         --model ${MODEL} \
         --n-steps ${N_STEPS} \
         --use-mpi \

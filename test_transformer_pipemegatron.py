@@ -6,6 +6,7 @@ from itertools import chain
 from apex import optimizers
 import numpy as np
 import torch
+from torch import nn
 import torch.distributed as dist
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
@@ -17,16 +18,13 @@ from transformer_models import (
     ModelParallelTransformerLayer,
 )
 
-WARM_UP_ROUNDS = 5
 LOSS_SCALE_FACTOR = 128.0
 
 
-class NCCLTransformerRunner:
+class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
-                 model_parallel_size, pipeline_parallel_size, rank, local_rank,
-                 n_steps, mixed_precision=False, use_mpi=False):
+                 model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False):
         self.config = config
-        self.n_layers = self.config.n_layers // self.config.n_devices
         self.n_batch_slices = n_batch_slices
         self.n_input_slices = n_input_slices
         torch.cuda.set_device(local_rank)
@@ -59,44 +57,36 @@ class NCCLTransformerRunner:
         self.model_parallel_prev_dst_rank = (
             self.model_parallel_dst_rank - self.model_parallel_size
             if self.pipeline_parallel_group_rank > 0 else None)
-        self.n_steps = n_steps
+
         self.n_layers = (config.n_layers // pipeline_parallel_size
                          + int(rank < config.n_layers % pipeline_parallel_size))
-        self.layers = [
-            ModelParallelTransformerLayer(
+        self.config = config
+        self.mixed_precision = mixed_precision
+
+        self.layers = []
+        for _ in range(self.n_layers):
+            l = ModelParallelTransformerLayer(
                 config.embedding_dim,
                 config.ffn_embedding_dim,
                 config.num_attention_heads,
                 device="cuda",
             )
-            for _ in range(self.n_layers)
-        ]
+            self.layers.append(l.half() if mixed_precision else l)
 
         self.all_parameters = []
         for layer in self.layers:
-            self.all_parameters += list(layer.parameters())
+            self.all_parameters.extend(layer.parameters())
         self.n_params = len(self.all_parameters)
 
-        self.mixed_precision = mixed_precision
-
         if self.mixed_precision:
-            for i in range(len(self.layers)):
-                self.layers[i] = self.layers[i].half()
-
-            self.all_parameters = []
-            for layer in self.layers:
-                self.all_parameters += list(layer.parameters())
-
             self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
             for p in self.master_parameters:
                 p.requires_grad_()
-
-        if self.mixed_precision:
             self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
         else:
             self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
-    def forward_step(self, all_inputs):
+    def forward_step(self, all_inputs, initial_cache_len=0):
         all_cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
         all_cache_outputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
         all_outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
@@ -104,13 +94,8 @@ class NCCLTransformerRunner:
         for batch_id in range(self.n_batch_slices):
             # forward
             slice_batch_size = all_inputs[batch_id, 0].size(1)
-            seq_len = self.config.seq_len
-            all_full_cache = np.empty(self.n_layers, dtype='O')
-            for layer_id in range(self.n_layers):
-                all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
-                    slice_batch_size, seq_len, device='cuda',
-                    dtype=torch.float16 if self.mixed_precision else torch.float32)
-            cache_len = 0
+            all_full_cache = self.create_attention_cache(slice_batch_size, initial_cache_len)
+            cache_len = initial_cache_len
             for input_id in range(self.n_input_slices):
                 x = all_inputs[batch_id, input_id]
                 slice_seq_len = x.size(0)
@@ -133,14 +118,9 @@ class NCCLTransformerRunner:
 
     def backward_step(self, sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs):
         for batch_id in reversed(range(self.n_batch_slices)):
-            all_full_cache_grad = np.empty(self.n_layers, dtype='O')
             slice_batch_size = all_inputs[batch_id, 0].size(1)
-            seq_len = self.config.seq_len
-            for layer_id in range(self.n_layers):
-                all_full_cache_grad[layer_id] = self.layers[layer_id].attn.create_attn_cache(
-                    slice_batch_size, seq_len, device='cuda',
-                    dtype=torch.float16 if self.mixed_precision else torch.float32)
-            cache_len = seq_len
+            all_full_cache_grad = self.create_attention_cache(slice_batch_size)
+            cache_len = self.config.seq_len
             for input_id in reversed(range(self.n_input_slices)):
                 dy = sliced_grad_x[batch_id, input_id]
                 if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
@@ -190,7 +170,6 @@ class NCCLTransformerRunner:
 
     def prepare_grad_x(self, all_outputs):
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
-            print("rank", self.rank, "calculate loss", flush=True)
             concated_outputs = torch.cat([torch.cat(batch_outputs.tolist(), dim=0) for batch_outputs in all_outputs], dim=1)
             if self.mixed_precision:
                 # cast reductions to FP32
@@ -203,7 +182,6 @@ class NCCLTransformerRunner:
             sliced_grad_x = torch.autograd.grad(loss, all_outputs.ravel())
             sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
                 self.n_batch_slices, self.n_input_slices)
-            print("rank", self.rank, "finish calculating loss", flush=True)
         else:
             grad_x = self.config.create_inputs_empty()
             if self.mixed_precision:
@@ -212,52 +190,14 @@ class NCCLTransformerRunner:
             del grad_x
         return sliced_grad_x
 
-    def step(self):
-        all_inputs = self.create_inputs()
-        start_time = time.time()
-        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
-        print("rank", self.rank, "forward_time", time.time() - start_time, flush=True)
-
-        # backward
-        start_time = time.time()
-
-        sliced_grad_x = self.prepare_grad_x(all_outputs)
-        self.backward_step(sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs)
-
-        del sliced_grad_x
-        del all_inputs
-        del all_outputs
-        del all_cache_inputs
-        del all_cache_outputs
-
-        if self.data_parallel_size > 1:
-            # data parallel allreduce
-            self.allreduce_params()
-
-        # copy FP16 model gradients to FP32 master before comparing/optimizing
-        if self.mixed_precision:
-            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
-                if master_param.grad is None:
-                    master_param.grad = master_param.new(*master_param.size())
-                # descale master weights
-                master_param.grad.copy_(model_param.grad).mul_(1. / LOSS_SCALE_FACTOR)
-                del model_param.grad
-
-        self.optimizer.step()
-        if self.mixed_precision:
-            # apex set 'set_to_none=True' by default and do not have such a parameter.
-            self.optimizer.zero_grad()
-        else:
-            self.optimizer.zero_grad(set_to_none=True)
-
-        if self.mixed_precision:
-            # copy master updated FP32 parameters back to FP16
-            with torch.no_grad():
-                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
-                    model_param.copy_(master_param)
-
-        print("rank", self.rank, "backward_time", time.time() - start_time, flush=True)
-        torch.cuda.synchronize()
+    def create_attention_cache(self, slice_batch_size, initial_cache_len=0):
+        seq_len = self.config.seq_len
+        all_full_cache = np.empty(self.n_layers, dtype='O')
+        for layer_id in range(self.n_layers):
+            all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
+                slice_batch_size, seq_len + initial_cache_len, device='cuda',
+                dtype=torch.float16 if self.mixed_precision else torch.float32)
+        return all_full_cache
 
     def allreduce_params(self, reduce_after=True, no_scale=False, fp32_allreduce=False):
         # adopted from https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/distributed.py
@@ -283,18 +223,63 @@ class NCCLTransformerRunner:
             for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
                 buf.copy_(synced)
 
-    def run(self):
+    def update_weights(self):
+        # copy FP16 model gradients to FP32 master before comparing/optimizing
+        if self.mixed_precision:
+            for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                if master_param.grad is None:
+                    master_param.grad = master_param.new(*master_param.size())
+                # descale master weights
+                master_param.grad.copy_(model_param.grad).mul_(1. / LOSS_SCALE_FACTOR)
+                del model_param.grad
+
+        self.optimizer.step()
+        if self.mixed_precision:
+            # apex set 'set_to_none=True' by default and do not have such a parameter.
+            self.optimizer.zero_grad()
+        else:
+            self.optimizer.zero_grad(set_to_none=True)
+
+        if self.mixed_precision:
+            # copy master updated FP32 parameters back to FP16
+            with torch.no_grad():
+                for model_param, master_param in zip(self.all_parameters, self.master_parameters):
+                    model_param.copy_(master_param)
+
+
+class NCCLTransformerRunner(NCCLTransformer):
+    def step(self):
+        all_inputs = self.create_inputs()
+        all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
+
+        sliced_grad_x = self.prepare_grad_x(all_outputs)
+        self.backward_step(sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs)
+
+        del sliced_grad_x
+        del all_inputs
+        del all_outputs
+        del all_cache_inputs
+        del all_cache_outputs
+
+        if self.data_parallel_size > 1:
+            # data parallel allreduce
+            self.allreduce_params()
+
+        self.update_weights()
+
+    def run(self, n_steps, warmup_steps=5):
         all_step_times = []
-        for _ in range(self.n_steps):
+        for _ in range(n_steps):
             start_time = time.time()
             self.step()
+            torch.cuda.synchronize()
             step_time = time.time() - start_time
             all_step_times.append(step_time)
             print("rank", self.rank, "step_time:", step_time, flush=True)
-        if len(all_step_times) > WARM_UP_ROUNDS:
+        if len(all_step_times) > warmup_steps:
             print("rank", self.rank,
-                  "step_time_mean:", np.mean(all_step_times[WARM_UP_ROUNDS:]),
-                  "step_time_std:", np.std(all_step_times[WARM_UP_ROUNDS:]),
+                  "step_time_mean:", np.mean(all_step_times[warmup_steps:]),
+                  "step_time_std:", np.std(all_step_times[warmup_steps:]),
                   flush=True)
 
     def verify_step(self, all_inputs):
@@ -386,13 +371,13 @@ def main():
     runner = NCCLTransformerRunner(
         config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
         data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
-        args.rank, args.local_rank, args.n_steps, mixed_precision=args.mixed_precision,
-        use_mpi=args.use_mpi
+        args.rank, args.local_rank, mixed_precision=args.mixed_precision,
+        use_mpi=args.use_mpi,
     )
     if args.verify:
         runner.verify()
     else:
-        runner.run()
+        runner.run(args.n_steps)
 
 
 if __name__ == "__main__":
