@@ -58,10 +58,9 @@ class NCCLTransformer:
             self.model_parallel_dst_rank - self.model_parallel_size
             if self.pipeline_parallel_group_rank > 0 else None)
 
-        n_layers = (config.n_layers // pipeline_parallel_size
-                    + int(rank < config.n_layers % pipeline_parallel_size))
+        self.n_layers = (config.n_layers // pipeline_parallel_size
+                         + int(rank < config.n_layers % pipeline_parallel_size))
         self.config = config
-        self.n_layers = n_layers
         self.mixed_precision = mixed_precision
 
         self.layers = []
