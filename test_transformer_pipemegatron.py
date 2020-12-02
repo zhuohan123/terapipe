@@ -49,12 +49,12 @@ class LocalTransformer(nn.Module):
         else:
             self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
-    def create_attention_cache(self, slice_batch_size):
+    def create_attention_cache(self, slice_batch_size, initial_cache_len=0):
         seq_len = self.config.seq_len
         all_full_cache = np.empty(self.n_layers, dtype='O')
         for layer_id in range(self.n_layers):
             all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
-                slice_batch_size, seq_len, device='cuda',
+                slice_batch_size, seq_len + initial_cache_len, device='cuda',
                 dtype=torch.float16 if self.mixed_precision else torch.float32)
         return all_full_cache
 
@@ -138,7 +138,7 @@ class NCCLTransformer(LocalTransformer):
         for batch_id in range(self.n_batch_slices):
             # forward
             slice_batch_size = all_inputs[batch_id, 0].size(1)
-            all_full_cache = self.create_attention_cache(slice_batch_size)
+            all_full_cache = self.create_attention_cache(slice_batch_size, initial_cache_len)
             cache_len = initial_cache_len
             for input_id in range(self.n_input_slices):
                 x = all_inputs[batch_id, input_id]
@@ -380,7 +380,7 @@ def main():
         config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
         data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-        use_mpi=args.use_mpi, 
+        use_mpi=args.use_mpi,
     )
     if args.verify:
         runner.verify()

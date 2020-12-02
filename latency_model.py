@@ -6,6 +6,9 @@ from sklearn.model_selection import train_test_split
 
 from transformer_models import MODEL_CONFIGS
 
+SCAN_GRID = (16, 16)
+STEP_GAP = 8
+
 
 class SingleLayerLatency:
     def __init__(self, f_plus_b_array, update_array, attn_cache_linear_model):
@@ -41,26 +44,23 @@ def fit_single_layer_model(model_name):
     attn_cache_len_latency = merge_dict(attn_cache_len_latency)
     seqlen_latency = merge_dict(seqlen_latency)
 
-    scan_grid = (16, 16)
-    step_gap = 8
-
-    X = np.arange(step_gap, seqlen+1, step_gap)
-    attn_cache_len_X = np.arange(seqlen // scan_grid[1], seqlen + 1, seqlen // scan_grid[1])
-    seqlen_X = np.arange(seqlen // scan_grid[0], seqlen + 1, seqlen // scan_grid[0])    
+    X = np.arange(STEP_GAP, seqlen+1, STEP_GAP)
+    attn_cache_len_X = np.arange(seqlen // SCAN_GRID[1], seqlen + 1, seqlen // SCAN_GRID[1])
+    seqlen_X = np.arange(seqlen // SCAN_GRID[0], seqlen + 1, seqlen // SCAN_GRID[0])    
 
     f_plus_b = seqlen_latency['forward_mean'] + seqlen_latency['backward_mean']
     
-    grid_seqlen_skip_gap = seqlen // scan_grid[0]
+    grid_seqlen_skip_gap = seqlen // SCAN_GRID[0]
 
     f_plus_b_for_attn_cache_len = f_plus_b[X % grid_seqlen_skip_gap == 0]
     
     attn_f_plus_b = attn_cache_len_latency['forward_mean'] + attn_cache_len_latency['backward_mean']
-    attn_f_plus_b = attn_f_plus_b.reshape(scan_grid)
+    attn_f_plus_b = attn_f_plus_b.reshape(SCAN_GRID)
     attn_delta = attn_f_plus_b - f_plus_b_for_attn_cache_len[None, :]
 
     # create dataset
-    X_seqlen = np.tile(seqlen_X, (scan_grid[1], 1)).ravel()
-    X_attn_cache_len = np.tile(attn_cache_len_X, (1, scan_grid[0])).ravel()
+    X_seqlen = np.tile(seqlen_X, (SCAN_GRID[1], 1)).ravel()
+    X_attn_cache_len = np.tile(attn_cache_len_X, (1, SCAN_GRID[0])).ravel()
     X_multiplied = (seqlen_X[None, :] * attn_cache_len_X[:, None]).ravel()
     X_data = np.stack([X_seqlen, X_attn_cache_len, X_multiplied]).transpose()
     Y_data = attn_delta.ravel()

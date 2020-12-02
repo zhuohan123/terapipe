@@ -9,6 +9,7 @@ import tqdm
 
 from test_transformer_pipemegatron import NCCLTransformer
 from transformer_models import TransformerConfig, MODEL_CONFIGS
+from latency_model import SCAN_GRID, STEP_GAP
 
 
 class TerapipeLatencyModel(NCCLTransformer):
@@ -119,6 +120,8 @@ def main():
 
     config = TransformerConfig.from_predefined_model(
         args.model, n_devices=args.world_size, batch_size=args.batch_size)
+    # We just test a single layer, since all of them are identical.
+    config.n_layers = 1
 
     data_parallel_size = args.world_size // (args.model_parallel_size * args.pipeline_parallel_size)
     assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
@@ -131,16 +134,21 @@ def main():
     )
     full_seqlen = config.seq_len
     results = []
-    for attn_cache_len in tqdm.tqdm(range(64, full_seqlen, 64)):
-        r = runner.run(full_seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
-        results.append(r)
+    for attn_cache_len in tqdm.tqdm(range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1])):
+        for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
+            r = runner.run(seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
+            results.append(r)
+    if args.rank == 0:
+        with open(f'{args.model}.latency_model.attn_cache_len.json', 'w') as f:
+            json.dump(results, f)
 
-    for seqlen in tqdm.tqdm(range(16, full_seqlen + 1, 16)):
-        r = runner.run(seqlen, 0, args.n_steps, args.warmup_steps)
-        results.append(r)
-
-    with open(f'{args.model}.latency_model.json', 'w') as f:
-        json.dump(results, f)
+    results = []
+    for seqlen in tqdm.tqdm(range(STEP_GAP, full_seqlen + 1, STEP_GAP)):
+         r = runner.run(seqlen, 0, args.n_steps, args.warmup_steps)
+         results.append(r)
+    if args.rank == 0:
+        with open(f'{args.model}.latency_model.seqlen.json', 'w') as f:
+            json.dump(results, f)
 
 
 if __name__ == "__main__":
