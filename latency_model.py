@@ -13,15 +13,18 @@ STEP_GAP = 8
 class SingleLayerLatency:
     def __init__(self, f_plus_b_array, update_array, attn_cache_linear_model):
         self.f_plus_b_array = f_plus_b_array
-        self.update_array = update_array
+        self.update_time = np.mean(update_array)
         self.attn_cache_linear_model = attn_cache_linear_model
 
     def predict(self, seqlen, attn_cache_len):
-        assert seqlen % 8 == 0
-        f_and_b_time = self.f_plus_b_array[seqlen // 8]
-        update_time = self.update_array[seqlen // 8]
+        assert seqlen % STEP_GAP == 0
+        f_and_b_time = self.f_plus_b_array[seqlen // STEP_GAP - 1]
+        
         attn_time = self.attn_cache_linear_model.predict([[seqlen, attn_cache_len, seqlen * attn_cache_len]])[0]
-        return f_and_b_time + update_time + attn_time
+        return f_and_b_time + attn_time
+
+    def update_time():
+        return self.update_time
 
 
 def merge_dict(data):
