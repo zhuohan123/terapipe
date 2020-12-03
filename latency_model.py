@@ -21,8 +21,6 @@ class SingleLayerLatency:
         f_and_b_time = self.f_plus_b_array[seqlen // STEP_GAP - 1]
         
         attn_time = self.attn_cache_linear_model.predict([[seqlen, attn_cache_len, seqlen * attn_cache_len]])[0]
-        if include_update_time:
-            return f_and_b_time + update_time + attn_time
         return f_and_b_time + attn_time
 
     def update_time():
