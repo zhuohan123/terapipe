@@ -28,7 +28,7 @@ class TerapipeLatencyModel(NCCLTransformer):
 
         # backward
         start = time.time()
-        self.backward_step(sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs)
+        self.backward_step(sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs, attn_cache_len)
         py_backward_time = time.time() - start
         torch.cuda.synchronize()
         backward_time = time.time() - start
