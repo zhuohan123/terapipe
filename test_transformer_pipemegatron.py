@@ -86,7 +86,7 @@ class NCCLTransformer:
         else:
             self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
-    def forward_step(self, all_inputs, initial_cache_len=0):
+    def forward_step(self, all_inputs, testing_cache_len=0):
         all_cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
         all_cache_outputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
         all_outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
@@ -94,8 +94,8 @@ class NCCLTransformer:
         for batch_id in range(self.n_batch_slices):
             # forward
             slice_batch_size = all_inputs[batch_id, 0].size(1)
-            all_full_cache = self.create_attention_cache(slice_batch_size, initial_cache_len)
-            cache_len = initial_cache_len
+            all_full_cache = self.create_attention_cache(slice_batch_size, testing_cache_len)
+            cache_len = testing_cache_len  # simulate the scenario where we have a cache of length testing_cache_len
             for input_id in range(self.n_input_slices):
                 x = all_inputs[batch_id, input_id]
                 slice_seq_len = x.size(0)
@@ -116,11 +116,11 @@ class NCCLTransformer:
                     self.comm.send_tensor(x, self.model_parallel_next_src_rank)
         return all_outputs, all_cache_inputs, all_cache_outputs
 
-    def backward_step(self, sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs):
+    def backward_step(self, sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs, testing_cache_len=0):
         for batch_id in reversed(range(self.n_batch_slices)):
             slice_batch_size = all_inputs[batch_id, 0].size(1)
-            all_full_cache_grad = self.create_attention_cache(slice_batch_size)
-            cache_len = self.config.seq_len
+            all_full_cache_grad = self.create_attention_cache(slice_batch_size, testing_cache_len)
+            cache_len = self.config.seq_len + testing_cache_len
             for input_id in reversed(range(self.n_input_slices)):
                 dy = sliced_grad_x[batch_id, input_id]
                 if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
@@ -131,7 +131,7 @@ class NCCLTransformer:
                 x = all_inputs[batch_id, input_id]
                 y = all_outputs[batch_id, input_id]
                 slice_seq_len = x.size(0)
-                if input_id < self.n_input_slices - 1:
+                if input_id < self.n_input_slices - 1 or testing_cache_len > 0:
                     a = list(chain.from_iterable(all_cache_outputs[batch_id, input_id]))
                     da = [x[:, cache_len - slice_seq_len:cache_len] for x in chain.from_iterable(all_full_cache_grad)]
                 else:
@@ -190,12 +190,12 @@ class NCCLTransformer:
             del grad_x
         return sliced_grad_x
 
-    def create_attention_cache(self, slice_batch_size, initial_cache_len=0):
+    def create_attention_cache(self, slice_batch_size, testing_cache_len=0):
         seq_len = self.config.seq_len
         all_full_cache = np.empty(self.n_layers, dtype='O')
         for layer_id in range(self.n_layers):
             all_full_cache[layer_id] = self.layers[layer_id].attn.create_attn_cache(
-                slice_batch_size, seq_len + initial_cache_len, device='cuda',
+                slice_batch_size, seq_len + testing_cache_len, device='cuda',
                 dtype=torch.float16 if self.mixed_precision else torch.float32)
         return all_full_cache
 
