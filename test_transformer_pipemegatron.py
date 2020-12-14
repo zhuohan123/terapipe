@@ -408,10 +408,17 @@ def main():
                     (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
                         model_parallel_size, pipeline_parallel_size), flush=True)
             print("-------- Experiment setup took %d ms --------" % ((time.time() - curr_time) * 1000), flush=True)
-        if args.verify:
-            runner.verify()
-        else:
-            runner.run(args.n_steps, verbose=args.verbose)
+        try:
+            if args.verify:
+                runner.verify()
+            else:
+                runner.run(args.n_steps, verbose=args.verbose)
+        except RuntimeError as e:
+            if args.verbose:
+                print(e)
+                exit(1)
+            print("Configuration was OOM! Trying next one...", flush=True)
+            continue
 
 
 if __name__ == "__main__":
