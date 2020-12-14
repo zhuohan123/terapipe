@@ -1,7 +1,10 @@
 import argparse
 import os
 import time
-from itertools import chain
+from itertools import chain, product
+from typing import List
+import gc
+
 
 from apex import optimizers
 import numpy as np
@@ -267,7 +270,7 @@ class NCCLTransformerRunner(NCCLTransformer):
 
         self.update_weights()
 
-    def run(self, n_steps, warmup_steps=5):
+    def run(self, n_steps, warmup_steps=5, verbose=True):
         all_step_times = []
         for _ in range(n_steps):
             start_time = time.time()
@@ -275,7 +278,8 @@ class NCCLTransformerRunner(NCCLTransformer):
             torch.cuda.synchronize()
             step_time = time.time() - start_time
             all_step_times.append(step_time)
-            print("rank", self.rank, "step_time:", step_time, flush=True)
+            if verbose:
+                print("rank", self.rank, "step_time:", step_time, flush=True)
         if len(all_step_times) > warmup_steps:
             print("rank", self.rank,
                   "step_time_mean:", np.mean(all_step_times[warmup_steps:]),
@@ -336,6 +340,9 @@ class NCCLTransformerRunner(NCCLTransformer):
         for grad1, grad2 in zip(grad_list1, grad_list2):
             print(torch.abs(grad1 - grad2).mean(), grad1.size())
 
+def parse_comma_delimited_arg(arg: str, cast_fn: function) -> List[any]:
+    list_form = arg.split(',')
+    return list(map(cast_fn, list_form))
 
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM')
@@ -344,17 +351,18 @@ def main():
     parser.add_argument('--rank', metavar='I', type=int, default=0)
     parser.add_argument('--local-rank', metavar='I', type=int, default=0)
     parser.add_argument('--world-size', metavar='N', type=int, default=1)
-    parser.add_argument('--model-parallel-size', metavar='N', type=int, default=1)
-    parser.add_argument('--pipeline-parallel-size', metavar='N', type=int, default=1)
+    parser.add_argument('--model-parallel-size', metavar='N', type=str, default='1')
+    parser.add_argument('--pipeline-parallel-size', metavar='N', type=str, default='1')
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
-    parser.add_argument('--batch-size', metavar='N', type=int, default=1)
-    parser.add_argument('--n-batch-slices', metavar='N', type=int, default=1)
-    parser.add_argument('--n-input-slices', metavar='N', type=int, default=1)
+    parser.add_argument('--batch-size', metavar='N', type=str, default='1')
+    parser.add_argument('--n-batch-slices', metavar='N', type=str, default='1')
+    parser.add_argument('--n-input-slices', metavar='N', type=str, default='1')
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
     parser.add_argument('--verify', action='store_true', default=False)
+    parser.add_argument('--verbose', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -362,22 +370,40 @@ def main():
         args.rank = int(os.getenv('OMPI_COMM_WORLD_RANK'))
         args.local_rank = int(os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'))
 
-    config = TransformerConfig.from_predefined_model(
-        args.model, n_devices=args.world_size, batch_size=args.batch_size)
+    args.model_parallel_size = parse_comma_delimited_arg(args.model_parallel_size, lambda x: int(x))
+    args.pipeline_parallel_size = parse_comma_delimited_arg(args.pipeline_parallel_size, lambda x: int(x))
+    args.batch_size = parse_comma_delimited_arg(args.batch_size, lambda x: int(x))
+    args.n_batch_slices = parse_comma_delimited_arg(args.n_batch_slices, lambda x: int(x))
+    args.n_input_slices = parse_comma_delimited_arg(args.n_input_slices, lambda x: int(x))
 
-    data_parallel_size = args.world_size // (args.model_parallel_size * args.pipeline_parallel_size)
-    assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
-    distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
-    runner = NCCLTransformerRunner(
-        config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
-        data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
-        args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-        use_mpi=args.use_mpi,
-    )
-    if args.verify:
-        runner.verify()
-    else:
-        runner.run(args.n_steps)
+    for experiment in product(args.model_parallel_size, args.pipeline_parallel_size, args.batch_size, args.n_batch_slices, args.n_input_slices):
+        curr_time = time.time()
+        model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices = experiment
+
+        config = TransformerConfig.from_predefined_model(
+            args.model, n_devices=args.world_size, batch_size=batch_size)
+
+        data_parallel_size = args.world_size // (model_parallel_size * pipeline_parallel_size)
+        assert args.world_size == data_parallel_size * model_parallel_size * pipeline_parallel_size
+        distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
+        runner = NCCLTransformerRunner(
+            config, n_batch_slices, n_input_slices, distributed_init_method, args.world_size,
+            data_parallel_size, model_parallel_size, pipeline_parallel_size,
+            args.rank, args.local_rank, mixed_precision=args.mixed_precision,
+            use_mpi=args.use_mpi,
+        )
+        # GC the last experiment run to prevent memory leaks.
+        gc.collect()
+        if args.rank == 0:
+            print("""-------- Beginning run for model %s; using %d GPUs; batch size %d; batch slices %d; input slices %d; steps %d; mixed precision %r
+                            model parallel size %d; pipeline parallel size %d --------""" % \
+                    (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
+                        model_parallel_size, pipeline_parallel_size), flush=True)
+            print("-------- Experiment setup took %d ms --------" % (time.time() - curr_time) * 1000, flush=True)
+        if args.verify:
+            runner.verify()
+        else:
+            runner.run(args.n_steps, verbose=args.verbose)
 
 
 if __name__ == "__main__":
