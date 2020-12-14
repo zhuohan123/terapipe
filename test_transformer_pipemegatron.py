@@ -64,6 +64,12 @@ class NCCLTransformer:
         self.mixed_precision = mixed_precision
 
         self.layers = []
+        self.initialize_model(config)
+
+    def initialize_model(self, config):
+        self.n_layers = (config.n_layers // self.pipeline_parallel_size
+                         + int(self.rank < config.n_layers % self.pipeline_parallel_size))
+
         for _ in range(self.n_layers):
             l = ModelParallelTransformerLayer(
                 config.embedding_dim,
@@ -71,7 +77,7 @@ class NCCLTransformer:
                 config.num_attention_heads,
                 device="cuda",
             )
-            self.layers.append(l.half() if mixed_precision else l)
+            self.layers.append(l.half() if self.mixed_precision else l)
 
         self.all_parameters = []
         for layer in self.layers:
