@@ -2,7 +2,8 @@ import argparse
 import os
 import time
 from itertools import chain, product
-from typing import List
+from types import FunctionType
+from typing import Callable, List
 import gc
 
 
@@ -340,7 +341,7 @@ class NCCLTransformerRunner(NCCLTransformer):
         for grad1, grad2 in zip(grad_list1, grad_list2):
             print(torch.abs(grad1 - grad2).mean(), grad1.size())
 
-def parse_comma_delimited_arg(arg: str, cast_fn: function) -> List[any]:
+def parse_comma_delimited_arg(arg: str, cast_fn: Callable[[str], any]) -> List[any]:
     list_form = arg.split(',')
     return list(map(cast_fn, list_form))
 
