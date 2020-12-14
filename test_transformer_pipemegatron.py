@@ -385,7 +385,10 @@ def main():
             args.model, n_devices=args.world_size, batch_size=batch_size)
 
         data_parallel_size = args.world_size // (model_parallel_size * pipeline_parallel_size)
-        assert args.world_size == data_parallel_size * model_parallel_size * pipeline_parallel_size
+        
+        if args.world_size != data_parallel_size * model_parallel_size * pipeline_parallel_size:
+            continue
+
         distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
         runner = NCCLTransformerRunner(
             config, n_batch_slices, n_input_slices, distributed_init_method, args.world_size,
