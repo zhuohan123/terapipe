@@ -396,7 +396,7 @@ def main():
         # GC the last experiment run to prevent memory leaks.
         gc.collect()
         if args.rank == 0:
-            print("""-------- Beginning run for model %s; using %d GPUs; batch size %d; batch slices %d; input slices %d; steps %d; mixed precision %r
+            print("""-------- Beginning run for model %s; using %d GPUs; batch size %d; batch slices %d; input slices %d; steps %d; mixed precision %r;\
                             model parallel size %d; pipeline parallel size %d --------""" % \
                     (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
                         model_parallel_size, pipeline_parallel_size), flush=True)
