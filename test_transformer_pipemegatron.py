@@ -5,7 +5,7 @@ from itertools import chain, product
 from types import FunctionType
 from typing import Callable, List
 import gc
-
+import json
 
 from apex import optimizers
 import numpy as np
@@ -287,6 +287,7 @@ class NCCLTransformerRunner(NCCLTransformer):
                   "step_time_mean:", np.mean(all_step_times[warmup_steps:]),
                   "step_time_std:", np.std(all_step_times[warmup_steps:]),
                   flush=True)
+        return np.mean(all_step_times[warmup_steps:]), np.std(all_step_times[warmup_steps:])
 
     def verify_step(self, all_inputs):
         all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
@@ -378,6 +379,8 @@ def main():
     args.n_batch_slices = parse_comma_delimited_arg(args.n_batch_slices, lambda x: int(x))
     args.n_input_slices = parse_comma_delimited_arg(args.n_input_slices, lambda x: int(x))
 
+    experiment_results = []
+
     should_initialize_dist_group = True
 
     for experiment in product(args.model_parallel_size, args.pipeline_parallel_size, args.batch_size, args.n_batch_slices, args.n_input_slices):
@@ -408,11 +411,26 @@ def main():
                     (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
                         model_parallel_size, pipeline_parallel_size), flush=True)
             print("-------- Experiment setup took %d ms --------" % ((time.time() - curr_time) * 1000), flush=True)
+        result = {
+            "model": args.model,
+            "n_gpus": args.world_size,
+            "batch_size": batch_size,
+            "n_batch_slices": n_batch_slices,
+            "n_input_slices": n_input_slices,
+            "n_steps": args.n_steps,
+            "mixed_precision": args.mixed_precision,
+            "model_parallel_size": model_parallel_size,
+            "pipeline_parallel_size": pipeline_parallel_size,
+        }
         try:
             if args.verify:
                 runner.verify()
             else:
-                runner.run(args.n_steps, verbose=args.verbose)
+                mean_time, std_time = runner.run(args.n_steps, verbose=args.verbose)
+                result["mean_time"] = mean_time
+                result["std_time"] = std_time
+
+                experiment_results.append(result)
         except RuntimeError as e:
             del runner
             gc.collect()
@@ -422,7 +440,14 @@ def main():
                 exit(1)
             if args.rank == 0:
                 print("Configuration was OOM! Trying next one...", flush=True)
+            result["mean_time"] = "OOM"
+            result["std_time"] = "OOM"
+            experiment_results.append(result)
             continue
+    if args.rank == 0:
+        f = open("results.json", "w")
+        json.dump(experiment_results, f)
+        f.close()
 
 
 if __name__ == "__main__":
