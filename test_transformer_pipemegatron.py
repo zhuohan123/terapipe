@@ -27,17 +27,18 @@ LOSS_SCALE_FACTOR = 128.0
 
 class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
-                 model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False):
+                 model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False, init_process_group=False):
         self.config = config
         self.n_batch_slices = n_batch_slices
         self.n_input_slices = n_input_slices
         torch.cuda.set_device(local_rank)
-        dist.init_process_group(
-            backend='nccl',
-            init_method=distributed_init_method,
-            world_size=world_size,
-            rank=rank,
-        )
+        if init_process_group:
+            dist.init_process_group(
+                backend='nccl',
+                init_method=distributed_init_method,
+                world_size=world_size,
+                rank=rank,
+            )
         dist.all_reduce(torch.zeros(1).cuda())
         mpu.initialize_model_parallel(model_parallel_size, pipeline_parallel_size)
         set_random_seed(0)
@@ -377,6 +378,8 @@ def main():
     args.n_batch_slices = parse_comma_delimited_arg(args.n_batch_slices, lambda x: int(x))
     args.n_input_slices = parse_comma_delimited_arg(args.n_input_slices, lambda x: int(x))
 
+    should_initialize_dist_group = True
+
     for experiment in product(args.model_parallel_size, args.pipeline_parallel_size, args.batch_size, args.n_batch_slices, args.n_input_slices):
         curr_time = time.time()
         model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices = experiment
@@ -394,13 +397,14 @@ def main():
             config, n_batch_slices, n_input_slices, distributed_init_method, args.world_size,
             data_parallel_size, model_parallel_size, pipeline_parallel_size,
             args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-            use_mpi=args.use_mpi,
+            use_mpi=args.use_mpi, init_process_group=should_initialize_dist_group
         )
+        should_initialize_dist_group = False
         # GC the last experiment run to prevent memory leaks.
         gc.collect()
         if args.rank == 0:
             print("""-------- Beginning run for model %s; using %d GPUs; batch size %d; batch slices %d; input slices %d; steps %d; mixed precision %r;\
-                            model parallel size %d; pipeline parallel size %d --------""" % \
+ model parallel size %d; pipeline parallel size %d --------""" % \
                     (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
                         model_parallel_size, pipeline_parallel_size), flush=True)
             print("-------- Experiment setup took %d ms --------" % ((time.time() - curr_time) * 1000), flush=True)
