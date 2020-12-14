@@ -417,7 +417,8 @@ def main():
             if args.verbose:
                 print(e)
                 exit(1)
-            print("Configuration was OOM! Trying next one...", flush=True)
+            if args.rank == 0:
+                print("Configuration was OOM! Trying next one...", flush=True)
             continue
 
 
