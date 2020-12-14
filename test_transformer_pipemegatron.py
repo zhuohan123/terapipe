@@ -16,7 +16,7 @@ from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 import mpu
 import nccl
-from utils import set_random_seed
+from utils import set_random_seed, timeout, TimeoutError
 from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_batch_and_input,
     ModelParallelTransformerLayer,
@@ -271,7 +271,7 @@ class NCCLTransformerRunner(NCCLTransformer):
             self.allreduce_params()
 
         self.update_weights()
-
+    @timeout(seconds=120)
     def run(self, n_steps, warmup_steps=5, verbose=True):
         all_step_times = []
         for _ in range(n_steps):
@@ -431,7 +431,7 @@ def main():
                 result["std_time"] = std_time
 
                 experiment_results.append(result)
-        except RuntimeError as e:
+        except (RuntimeError, TimeoutError) as e:
             del runner
             gc.collect()
             torch.cuda.empty_cache()
