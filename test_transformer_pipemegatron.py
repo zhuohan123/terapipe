@@ -400,7 +400,7 @@ def main():
                             model parallel size %d; pipeline parallel size %d --------""" % \
                     (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
                         model_parallel_size, pipeline_parallel_size), flush=True)
-            print("-------- Experiment setup took %d ms --------" % (time.time() - curr_time) * 1000, flush=True)
+            print("-------- Experiment setup took %d ms --------" % ((time.time() - curr_time) * 1000), flush=True)
         if args.verify:
             runner.verify()
         else:
