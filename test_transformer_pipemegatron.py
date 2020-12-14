@@ -414,6 +414,8 @@ def main():
             else:
                 runner.run(args.n_steps, verbose=args.verbose)
         except RuntimeError as e:
+            del runner
+            gc.collect()
             torch.cuda.empty_cache()
             if args.verbose:
                 print(e)
