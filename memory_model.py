@@ -2,7 +2,18 @@ from transformer_models import MODEL_CONFIGS
 
 
 def peak_memory_per_gpu(model_name, batch_size, n_nodes, gpus_per_megatronlm_shard=8, gpus_per_node=8):
-    # for megatron-lm, 
+    """Compute peak memory per GPU in GBs.
+
+    Args:
+        model_name (str): The name of the model.
+        batch_size (int): Batch size per data parallel shard.
+        n_nodes (int): Number of nodes per data parallel shard.
+        gpus_per_megatronlm_shard (int, optional): Number of GPUs per Megatron-LM shard. Defaults to 8.
+        gpus_per_node (int, optional): Number of GPUs per node. Defaults to 8.
+
+    Returns:
+        float: Peak memory estimated in GBs.
+    """
     n_layers, hidden_size, sequence_length, num_attention_heads = MODEL_CONFIGS[model_name]
     assert n_layers % n_nodes == 0
     assert gpus_per_node % gpus_per_megatronlm_shard == 0
