@@ -21,6 +21,7 @@ from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_batch_and_input,
     ModelParallelTransformerLayer,
 )
+from memory_model import peak_memory_per_gpu
 
 LOSS_SCALE_FACTOR = 128.0
 
@@ -387,6 +388,25 @@ def main():
         curr_time = time.time()
         model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices = experiment
 
+        result = {
+            "model": args.model,
+            "n_gpus": args.world_size,
+            "batch_size": batch_size,
+            "n_batch_slices": n_batch_slices,
+            "n_input_slices": n_input_slices,
+            "n_steps": args.n_steps,
+            "mixed_precision": args.mixed_precision,
+            "model_parallel_size": model_parallel_size,
+            "pipeline_parallel_size": pipeline_parallel_size,
+        }
+        memory_usage = peak_memory_per_gpu(args.model, batch_size, args.world_size // 8)
+        if memory_usage > 16.0:
+            result["mean_time"] = "OOM"
+            result["std_time"] = "OOM"
+            experiment_results.append(result)
+            continue
+
+
         config = TransformerConfig.from_predefined_model(
             args.model, n_devices=args.world_size, batch_size=batch_size)
 
@@ -411,17 +431,6 @@ def main():
                     (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
                         model_parallel_size, pipeline_parallel_size), flush=True)
             print("-------- Experiment setup took %d ms --------" % ((time.time() - curr_time) * 1000), flush=True)
-        result = {
-            "model": args.model,
-            "n_gpus": args.world_size,
-            "batch_size": batch_size,
-            "n_batch_slices": n_batch_slices,
-            "n_input_slices": n_input_slices,
-            "n_steps": args.n_steps,
-            "mixed_precision": args.mixed_precision,
-            "model_parallel_size": model_parallel_size,
-            "pipeline_parallel_size": pipeline_parallel_size,
-        }
         try:
             if args.verify:
                 runner.verify()
