@@ -63,6 +63,9 @@ def main():
 
     for experiment in product(args.model_parallel_size, args.pipeline_parallel_size, args.batch_size, args.n_batch_slices, args.n_input_slices, args.model):
         model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices, model = experiment
+
+        if model_parallel_size * pipeline_parallel_size != 8 or args.batch_size % args.n_batch_slices != 0:
+            continue
         run_experiment(args.n_nodes, args.n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
             model, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision)
 
