@@ -274,7 +274,7 @@ class NCCLTransformerRunner(NCCLTransformer):
             self.allreduce_params()
 
         self.update_weights()
-    @timeout(seconds=120)
+    @timeout(seconds=500)
     def run(self, n_steps, warmup_steps=5, verbose=True):
         all_step_times = []
         for _ in range(n_steps):
