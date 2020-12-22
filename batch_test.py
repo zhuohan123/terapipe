@@ -39,7 +39,6 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
         os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs sudo kill")
     except RuntimeError as e:
         print(e)
-        os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs sudo kill")
 
 """
 python batch_test.py --n-nodes 8 --n-gpus-per-node 8 --model-parallel-size 1,2,4,8 --pipeline-parallel-size 1,2,4,8 --model gpt3-1b --batch-size 1,4,16 --n-batch-slices 1,4,16 --n-input-slices 1,8,16,32,64 --n-steps 10 --mixed-precision
