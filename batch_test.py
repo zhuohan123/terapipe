@@ -33,7 +33,7 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
     try:
         # 2min timeout
         print("Running", " ".join(run_cmd))
-        ret = subprocess.run(fixed_run_cmd, timeout=120, check=True, shell=True)
+        ret = subprocess.run(fixed_run_cmd, timeout=500, check=True, shell=True)
         print(ret)
     except subprocess.TimeoutExpired as e:
         os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs sudo kill")
