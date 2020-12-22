@@ -28,8 +28,6 @@ from memory_model import peak_memory_per_gpu
 
 LOSS_SCALE_FACTOR = 128.0
 
-wandb.init(project='terapipe', entity="sguo35")
-
 class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False, init_process_group=False):
@@ -384,6 +382,9 @@ def main():
     args.n_batch_slices = parse_comma_delimited_arg(args.n_batch_slices, lambda x: int(x))
     args.n_input_slices = parse_comma_delimited_arg(args.n_input_slices, lambda x: int(x))
 
+    if args.rank == 0:
+        wandb.init(project='terapipe', entity="sguo35")
+
     experiment_results = []
 
     should_initialize_dist_group = True
@@ -421,7 +422,7 @@ def main():
             continue
 
         result["data_parallel_size"] = data_parallel_size
-        wandb.config.update(result)
+        wandb.config.update(result, allow_val_change=True)
 
         distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
         runner = NCCLTransformerRunner(
