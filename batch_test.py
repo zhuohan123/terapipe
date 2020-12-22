@@ -76,7 +76,7 @@ def main():
             if (args.n_nodes * args.n_gpus_per_node) % (model_parallel_size * pipeline_parallel_size) != 0 or batch_size % n_batch_slices != 0:
                 continue
             data_parallel_size = (args.n_nodes * args.n_gpus_per_node) // (model_parallel_size * pipeline_parallel_size)
-            memory_usage = peak_memory_per_gpu(model, batch_size, model_parallel_size * pipeline_parallel_size, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
+            memory_usage = peak_memory_per_gpu(model, batch_size, args.n_nodes, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
             if memory_usage > 10.0:
                 continue
 
