@@ -89,6 +89,7 @@ def main():
         run_experiment(args.n_nodes, args.n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
             model, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision)
         json.dump(experiments, open("experiments_remaining.json", "w"))
+        print("%d experiments remaining" % len(experiments), flush=True)
 
 if __name__ == '__main__':
     main()
