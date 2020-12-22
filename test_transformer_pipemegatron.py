@@ -450,10 +450,11 @@ def main():
                 result["std_time"] = std_time
 
                 experiment_results.append(result)
-                wandb.log({
-                    "mean_time": mean_time,
-                    "std_time": std_time
-                })
+                if args.rank == 0:
+                    wandb.log({
+                        "mean_time": mean_time,
+                        "std_time": std_time
+                    })
         except (RuntimeError, TimeoutError) as e:
             del runner
             gc.collect()
