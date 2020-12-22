@@ -1,6 +1,7 @@
 import os
 import subprocess
 import argparse
+import json
 
 from itertools import product
 
@@ -65,17 +66,29 @@ def main():
     args.n_input_slices = parse_comma_delimited_arg(args.n_input_slices, lambda x: int(x))
     args.model = parse_comma_delimited_arg(args.model, lambda x: str(x))
 
-    for experiment in product(args.model_parallel_size, args.pipeline_parallel_size, args.batch_size, args.n_batch_slices, args.n_input_slices, args.model):
-        model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices, model = experiment
+    if os.path.exists("experiments_remaining.json"):
+        experiments = json.load(open("experiments_remaining.json", "r"))
+    else:
+        experiments = []
+        for experiment in product(args.model_parallel_size, args.pipeline_parallel_size, args.batch_size, args.n_batch_slices, args.n_input_slices, args.model):
+            model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices, model = experiment
 
-        if (args.n_nodes * args.n_gpus_per_node) % (model_parallel_size * pipeline_parallel_size) != 0 or batch_size % n_batch_slices != 0:
-            continue
-        data_parallel_size = (args.n_nodes * args.n_gpus_per_node) // (model_parallel_size * pipeline_parallel_size)
-        memory_usage = peak_memory_per_gpu(model, batch_size, model_parallel_size * pipeline_parallel_size, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
-        if memory_usage > 10.0:
-            continue
+            if (args.n_nodes * args.n_gpus_per_node) % (model_parallel_size * pipeline_parallel_size) != 0 or batch_size % n_batch_slices != 0:
+                continue
+            data_parallel_size = (args.n_nodes * args.n_gpus_per_node) // (model_parallel_size * pipeline_parallel_size)
+            memory_usage = peak_memory_per_gpu(model, batch_size, model_parallel_size * pipeline_parallel_size, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
+            if memory_usage > 10.0:
+                continue
+
+            experiments.append(experiment)
+        
+
+    while len(experiments) > 0:
+        experiment = experiments.pop()
+        model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices, model = experiment
         run_experiment(args.n_nodes, args.n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
             model, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision)
+        json.dump(experiments, open("experiments_remaining.json", "w"))
 
 if __name__ == '__main__':
     main()
