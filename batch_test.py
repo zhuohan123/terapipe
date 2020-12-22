@@ -4,6 +4,10 @@ import argparse
 
 from itertools import product
 
+import numpy
+from memory_model import peak_memory_per_gpu
+
+
 def parse_comma_delimited_arg(arg, cast_fn):
     list_form = arg.split(',')
     return list(map(cast_fn, list_form))
@@ -65,6 +69,10 @@ def main():
         model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices, model = experiment
 
         if (args.n_nodes * args.n_gpus_per_node) % (model_parallel_size * pipeline_parallel_size) != 0 or batch_size % n_batch_slices != 0:
+            continue
+        data_parallel_size = (args.n_nodes * args.n_gpus_per_node) // (model_parallel_size * pipeline_parallel_size)
+        memory_usage = peak_memory_per_gpu(args.model, batch_size, model_parallel_size * pipeline_parallel_size, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
+        if memory_usage > 10.0:
             continue
         run_experiment(args.n_nodes, args.n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
             model, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision)
