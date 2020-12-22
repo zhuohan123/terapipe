@@ -29,17 +29,18 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
         (lambda x: "--mixed-precision" if x else '')(mixed_precision)
     ]
 
-    p = subprocess.Popen(run_cmd, shell=True)
     try:
         # 2min timeout
-        p.wait(120)
+        subprocess.run(run_cmd, capture_output=True, timeout=120)
     except subprocess.TimeoutExpired as e:
-        os.system("./scripts/fornode pkill python")
+        os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs kill")
     except RuntimeError as e:
         print(e)
-        os.system("./scripts/fornode pkill python")
+        os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs kill")
 
-
+"""
+python batch_test.py --n-nodes 8 --n-gpus-per-node 8 --model-parallel-size 1,2,4,8 --pipeline-parallel-size 1,2,4,8 --model gpt3-1b --batch-size 1,4,16 --n-batch-slices 1,4,16 --n-input-slices 1,8,16,32,64 --n-steps 10 --mixed-precision
+"""
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM runner')
     parser.add_argument('--n-nodes', metavar='N', type=int, default=8)
