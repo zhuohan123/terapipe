@@ -462,9 +462,8 @@ def main():
             del runner
             gc.collect()
             torch.cuda.empty_cache()
-            if args.verbose:
-                print(e)
-                exit(1)
+            print(e)
+            exit(1)
             if args.rank == 0:
                 print("Configuration was OOM! Trying next one...", flush=True)
             result["mean_time"] = "OOM"
