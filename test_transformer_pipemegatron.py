@@ -419,7 +419,7 @@ def main():
             continue
 
         if args.rank == 0:
-            wandb.init(project='terapipe', entity="sguo35")
+            run = wandb.init(project='terapipe', entity="sguo35", reinit=True)
 
         result["data_parallel_size"] = data_parallel_size
         if args.rank == 0:
@@ -468,6 +468,8 @@ def main():
             result["std_time"] = "OOM"
             experiment_results.append(result)
             continue
+        if args.rank == 0:
+            run.finish()
     if args.rank == 0:
         f = open("results.json", "w")
         json.dump(experiment_results, f)
