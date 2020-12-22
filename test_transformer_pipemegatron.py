@@ -390,6 +390,8 @@ def main():
         curr_time = time.time()
         model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices = experiment
 
+        data_parallel_size = args.world_size // (model_parallel_size * pipeline_parallel_size)
+
         result = {
             "model": args.model,
             "n_gpus": args.world_size,
@@ -402,7 +404,7 @@ def main():
             "pipeline_parallel_size": pipeline_parallel_size,
             "rank": args.rank
         }
-        memory_usage = peak_memory_per_gpu(args.model, batch_size, args.world_size // 8)
+        memory_usage = peak_memory_per_gpu(args.model, batch_size, model_parallel_size * pipeline_parallel_size, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
         if memory_usage > 16.0:
             result["mean_time"] = "OOM"
             result["std_time"] = "OOM"
@@ -412,8 +414,6 @@ def main():
 
         config = TransformerConfig.from_predefined_model(
             args.model, n_devices=args.world_size, batch_size=batch_size)
-
-        data_parallel_size = args.world_size // (model_parallel_size * pipeline_parallel_size)
 
         if args.world_size != data_parallel_size * model_parallel_size * pipeline_parallel_size:
             continue
