@@ -422,7 +422,8 @@ def main():
             continue
 
         result["data_parallel_size"] = data_parallel_size
-        wandb.config.update(result, allow_val_change=True)
+        if args.rank == 0:
+            wandb.config.update(result, allow_val_change=True)
 
         distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
         runner = NCCLTransformerRunner(
