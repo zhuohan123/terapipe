@@ -28,7 +28,7 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
         (lambda x: "--mixed-precision" if x else '')(mixed_precision)
     ]
     fixed_run_cmd = ' '.join(run_cmd)
-
+    os.environ['MKL_THREADING_LAYER'] = 'GNU'
     try:
         # 2min timeout
         print("Running", " ".join(run_cmd))
