@@ -382,9 +382,6 @@ def main():
     args.n_batch_slices = parse_comma_delimited_arg(args.n_batch_slices, lambda x: int(x))
     args.n_input_slices = parse_comma_delimited_arg(args.n_input_slices, lambda x: int(x))
 
-    if args.rank == 0:
-        wandb.init(project='terapipe', entity="sguo35")
-
     experiment_results = []
 
     should_initialize_dist_group = True
@@ -408,7 +405,7 @@ def main():
             "rank": args.rank
         }
         memory_usage = peak_memory_per_gpu(args.model, batch_size, model_parallel_size * pipeline_parallel_size, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
-        if memory_usage > 14.0:
+        if memory_usage > 10.0:
             result["mean_time"] = "OOM"
             result["std_time"] = "OOM"
             experiment_results.append(result)
@@ -420,6 +417,9 @@ def main():
 
         if args.world_size != data_parallel_size * model_parallel_size * pipeline_parallel_size:
             continue
+
+        if args.rank == 0:
+            wandb.init(project='terapipe', entity="sguo35")
 
         result["data_parallel_size"] = data_parallel_size
         if args.rank == 0:
