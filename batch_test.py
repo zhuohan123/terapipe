@@ -77,7 +77,7 @@ def main():
                 continue
             data_parallel_size = (args.n_nodes * args.n_gpus_per_node) // (model_parallel_size * pipeline_parallel_size)
             memory_usage = peak_memory_per_gpu(model, batch_size, args.n_nodes, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
-            if memory_usage > 10.0:
+            if memory_usage > 14.0:
                 continue
 
             experiments.append(experiment)
