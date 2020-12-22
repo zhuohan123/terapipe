@@ -13,6 +13,7 @@ import torch
 from torch import nn
 import torch.distributed as dist
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
+import wandb
 
 import mpu
 import nccl
@@ -25,6 +26,7 @@ from memory_model import peak_memory_per_gpu
 
 LOSS_SCALE_FACTOR = 128.0
 
+wandb.init(project='terapipe', entity="sguo35")
 
 class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
@@ -398,6 +400,7 @@ def main():
             "mixed_precision": args.mixed_precision,
             "model_parallel_size": model_parallel_size,
             "pipeline_parallel_size": pipeline_parallel_size,
+            "rank": args.rank
         }
         memory_usage = peak_memory_per_gpu(args.model, batch_size, args.world_size // 8)
         if memory_usage > 16.0:
@@ -411,9 +414,12 @@ def main():
             args.model, n_devices=args.world_size, batch_size=batch_size)
 
         data_parallel_size = args.world_size // (model_parallel_size * pipeline_parallel_size)
-        
+
         if args.world_size != data_parallel_size * model_parallel_size * pipeline_parallel_size:
             continue
+
+        result["data_parallel_size"] = data_parallel_size
+        wandb.config.update(result)
 
         distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
         runner = NCCLTransformerRunner(
@@ -440,6 +446,10 @@ def main():
                 result["std_time"] = std_time
 
                 experiment_results.append(result)
+                wandb.log({
+                    "mean_time": mean_time,
+                    "std_time": std_time
+                })
         except (RuntimeError, TimeoutError) as e:
             del runner
             gc.collect()
