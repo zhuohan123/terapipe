@@ -408,7 +408,7 @@ def main():
             "rank": args.rank
         }
         memory_usage = peak_memory_per_gpu(args.model, batch_size, model_parallel_size * pipeline_parallel_size, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
-        if memory_usage > 10.0:
+        if memory_usage > 14.0:
             result["mean_time"] = "OOM"
             result["std_time"] = "OOM"
             experiment_results.append(result)
