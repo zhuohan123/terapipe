@@ -1,8 +1,6 @@
 #!/bin/bash
-
 if [ "$#" -lt 9 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, number of gpus per node, model parallel size, pipeline parallel size, model name, batch size, number of batch slices, number of input slices, number of steps, [extra args] required"; exit -1; fi
 if [ "$#" -gt 10 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
-
 N_NODES=$1
 N_GPUS=$2 # per node
 MODEL_PARALLEL_SIZE=$3
@@ -20,7 +18,7 @@ ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/scripts/load_cluster_env.sh
 
 # ${ROOT_DIR}/scripts/fornode fuser -k 7777/tcp
-${ROOT_DIR}/scripts/fornode pkill python
+${ROOT_DIR}/scripts/fornode "pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs sudo kill"
 
 echo ALL_IPADDR ${ALL_IPADDR[@]}
 all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')

@@ -4,19 +4,14 @@ import argparse
 
 from itertools import product
 
-from transformer_models import (
-    MODEL_CONFIGS
-)
-
 def parse_comma_delimited_arg(arg, cast_fn):
     list_form = arg.split(',')
     return list(map(cast_fn, list_form))
 
-def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_parallel_size, 
+def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
                 model, batch_size, n_batch_slices, n_input_slices, n_steps, mixed_precision):
     run_cmd = [
-        "bash",
-        "mpirun_pipemegatron.sh",
+        "/home/ubuntu/model-parallel-speed-test/mpirun_pipemegatron.sh",
         str(n_nodes),
         str(n_gpus_per_node),
         str(model_parallel_size),
@@ -28,15 +23,18 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
         str(n_steps),
         (lambda x: "--mixed-precision" if x else '')(mixed_precision)
     ]
+    fixed_run_cmd = ' '.join(run_cmd)
 
     try:
         # 2min timeout
-        subprocess.run(run_cmd, capture_output=True, timeout=120)
+        print("Running", " ".join(run_cmd))
+        ret = subprocess.run(fixed_run_cmd, timeout=120, check=True, shell=True)
+        print(ret)
     except subprocess.TimeoutExpired as e:
-        os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs kill")
+        os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs sudo kill")
     except RuntimeError as e:
         print(e)
-        os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs kill")
+        os.system("pgrep -fl python | awk '!/batch_test\.py/{print $1}' | xargs sudo kill")
 
 """
 python batch_test.py --n-nodes 8 --n-gpus-per-node 8 --model-parallel-size 1,2,4,8 --pipeline-parallel-size 1,2,4,8 --model gpt3-1b --batch-size 1,4,16 --n-batch-slices 1,4,16 --n-input-slices 1,8,16,32,64 --n-steps 10 --mixed-precision
@@ -67,3 +65,6 @@ def main():
         model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices, model = experiment
         run_experiment(args.n_nodes, args.n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
             model, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision)
+
+if __name__ == '__main__':
+    main()
