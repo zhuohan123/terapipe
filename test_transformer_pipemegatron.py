@@ -392,6 +392,9 @@ def main():
 
         data_parallel_size = args.world_size // (model_parallel_size * pipeline_parallel_size)
 
+        if batch_size % n_batch_slices != 0:
+            continue
+
         result = {
             "model": args.model,
             "n_gpus": args.world_size,
