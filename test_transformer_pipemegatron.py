@@ -82,7 +82,8 @@ class NCCLTransformer:
             self.master_parameters = [p.clone().detach().float() for p in self.all_parameters]
             for p in self.master_parameters:
                 p.requires_grad_()
-            self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
+            #self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
+            self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
         else:
             self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
 
