@@ -415,7 +415,7 @@ def main():
         memory_usage = peak_memory_per_gpu(args.model, batch_size, args.world_size // 8, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
         MEMORY_LIMIT = 14.0
         if args.checkpoint_gradients:
-            MEMORY_LIMIT *= 2
+            MEMORY_LIMIT *= 8
         if memory_usage > MEMORY_LIMIT:
             result["mean_time"] = "OOM"
             result["std_time"] = "OOM"
