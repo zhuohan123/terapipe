@@ -467,8 +467,6 @@ def main():
             result["std_time"] = "OOM"
             experiment_results.append(result)
             continue
-        if args.rank == 0:
-            run.finish()
     if args.rank == 0:
         f = open("results.json", "w")
         json.dump(experiment_results, f)
