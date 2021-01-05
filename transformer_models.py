@@ -277,16 +277,9 @@ class TransformerLayer(nn.Module):
         y = x
         x = self.fc_ln(x)
 
-        def attn_helper(x):
-            x = self.fc1(x).relu_()
-            x = self.fc2(x)
-            return x
-        if self.checkpoint_gradients:
-            ckpt_args = (x,) + tuple(self.fc1.parameters()) + tuple(self.fc2.parameters())
-            x = checkpoint.CheckpointFunction.apply(attn_helper, 1, *ckpt_args)
-        else:
-            x = self.fc1(x).relu_()
-            x = self.fc2(x)
+
+        x = self.fc1(x).relu_()
+        x = self.fc2(x)
         x += y
         return x, new_attn_cache
 

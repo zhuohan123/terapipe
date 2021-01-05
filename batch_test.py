@@ -45,6 +45,8 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
 """
 python batch_test.py --n-nodes 8 --n-gpus-per-node 8 --model-parallel-size 1,2,4,8 --pipeline-parallel-size 1,2,4,8 --model gpt3-1b --batch-size 1,4,16 --n-batch-slices 1,4,16 --n-input-slices 1,8,16,32,64 --n-steps 10 --mixed-precision
 python batch_test.py --n-nodes 8 --n-gpus-per-node 8 --model-parallel-size 1,4,8 --pipeline-parallel-size 1,4,8 --model megatron-8b --batch-size 1,4,16 --n-batch-slices 1,4,16 --n-input-slices 1,8,16,32,64 --n-steps 10 --mixed-precision
+python batch_test.py --n-nodes 8 --n-gpus-per-node 8 --model-parallel-size 1,4,8 --pipeline-parallel-size 1,4,8 --model gpt3-13b --batch-size 1,4,16,64 --n-batch-slices 1,4,16,64 --n-input-slices 1,8,16,64 --n-steps 10 --mixed-precision
+python batch_test.py --n-nodes 8 --n-gpus-per-node 8 --model-parallel-size 1,4,8 --pipeline-parallel-size 1,4,8 --model gpt3-13b --batch-size 1,4,16,64 --n-batch-slices 1,4,16,64 --n-input-slices 1,8,16,64 --n-steps 10 --mixed-precision --checkpoint-gradients
 """
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM runner')
