@@ -416,7 +416,7 @@ def main():
         print("memory prediction:", memory_usage, flush=True)
         MEMORY_LIMIT = 14.0
         if args.checkpoint_gradients:
-            MEMORY_LIMIT *= args.world_size
+            MEMORY_LIMIT *= 2
         if memory_usage > MEMORY_LIMIT:
             result["mean_time"] = "OOM"
             result["std_time"] = "OOM"
