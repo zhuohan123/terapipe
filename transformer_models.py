@@ -233,9 +233,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
 
         if checkpoint_gradients:
-            attn = checkpoint.CheckpointFunction.apply(torch.bmm, 2, *(attn_probs, v))
-            attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
-            attn = checkpoint.CheckpointFunction.apply(self.out_proj, 1, *((attn,) + tuple(self.out_proj.parameters())))
+            def attn_helper(attn_probs, v):
+                attn = torch.bmm(attn_probs, v)
+                attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
+                attn = self.out_proj(attn)
+                return attn
+            ckpt_args = (attn_probs, v) + tuple(self.out_proj.parameters())
+            attn = checkpoint.CheckpointFunction.apply(attn_helper, 2, *ckpt_args)
         else:
             attn = torch.bmm(attn_probs, v)
             attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
@@ -266,17 +270,16 @@ class TransformerLayer(nn.Module):
 
         y = x
         x = self.fc_ln(x)
+
+        def attn_helper(x):
+            x = self.fc1(x).relu_()
+            x = self.fc2(x)
+            return x
         if self.checkpoint_gradients:
-            ckpt_args = (x,) + tuple(self.fc1.parameters())
-            x = checkpoint.CheckpointFunction.apply(self.fc1, 1, *ckpt_args)
-            x = x.relu_()
+            ckpt_args = (x,) + tuple(self.fc1.parameters()) + tuple(self.fc2.parameters())
+            x = checkpoint.CheckpointFunction.apply(attn_helper, 1, *ckpt_args)
         else:
             x = self.fc1(x).relu_()
-
-        if self.checkpoint_gradients:
-            ckpt_args = (x,) + tuple(self.fc2.parameters())
-            x = checkpoint.CheckpointFunction.apply(self.fc2, 1, *ckpt_args)
-        else:
             x = self.fc2(x)
         x += y
         return x, new_attn_cache
