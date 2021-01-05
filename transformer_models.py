@@ -233,7 +233,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
             attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
             return attn
         if checkpoint_gradients:
-            ckpt_args = (q, k, v) + tuple(self.out_proj.parameters())
+            ckpt_args = (q, k, v)
             attn = checkpoint.CheckpointFunction.apply(attn_helper, 3, *ckpt_args)
         else:
             attn = attn_helper(q, k, v)
