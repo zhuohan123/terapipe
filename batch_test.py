@@ -14,7 +14,8 @@ def parse_comma_delimited_arg(arg, cast_fn):
     return list(map(cast_fn, list_form))
 
 def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
-                model, batch_size, n_batch_slices, n_input_slices, n_steps, mixed_precision):
+                model, batch_size, n_batch_slices, n_input_slices, n_steps, mixed_precision,
+                checkpoint_gradients):
     run_cmd = [
         "/home/ubuntu/model-parallel-speed-test/mpirun_pipemegatron.sh",
         str(n_nodes),
@@ -26,7 +27,8 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
         str(n_batch_slices),
         str(n_input_slices),
         str(n_steps),
-        (lambda x: "--mixed-precision" if x else '')(mixed_precision)
+        (lambda x: "--mixed-precision" if x else '')(mixed_precision),
+        (lambda x: "--checkpoint-gradients" if x else '')(checkpoint_gradients)
     ]
     fixed_run_cmd = ' '.join(run_cmd)
     os.environ['MKL_THREADING_LAYER'] = 'GNU'
@@ -56,6 +58,7 @@ def main():
     parser.add_argument('--n-input-slices', metavar='N', type=str, default='1')
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
+    parser.add_argument('--checkpoint-gradients', action='store_true', default=False)
 
     args = parser.parse_args()
 
@@ -87,7 +90,7 @@ def main():
         experiment = experiments.pop()
         model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices, model = experiment
         run_experiment(args.n_nodes, args.n_gpus_per_node, model_parallel_size, pipeline_parallel_size,
-            model, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision)
+            model, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision, args.checkpoint_gradients)
         json.dump(experiments, open("experiments_remaining.json", "w"))
         print("%d experiments remaining" % len(experiments), flush=True)
 

@@ -25,12 +25,14 @@ from transformer_models import (
     ModelParallelTransformerLayer,
 )
 from memory_model import peak_memory_per_gpu
+import checkpoint
 
 LOSS_SCALE_FACTOR = 128.0
 
 class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
-                 model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False, init_process_group=False):
+                 model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False, init_process_group=False,
+                 checkpoint_gradients=False):
         self.config = config
         self.n_batch_slices = n_batch_slices
         self.n_input_slices = n_input_slices
@@ -70,16 +72,17 @@ class NCCLTransformer:
                          + int(rank < config.n_layers % pipeline_parallel_size))
         self.config = config
         self.mixed_precision = mixed_precision
+        self.checkpoint_gradients = checkpoint_gradients
 
         self.layers = []
         for _ in range(self.n_layers):
             l = ModelParallelTransformerLayer(
-                config.embedding_dim,
-                config.ffn_embedding_dim,
-                config.num_attention_heads,
+                self.config.embedding_dim,
+                self.config.ffn_embedding_dim,
+                self.config.num_attention_heads,
                 device="cuda",
             )
-            self.layers.append(l.half() if mixed_precision else l)
+            self.layers.append(l.half() if self.mixed_precision else l)
 
         self.all_parameters = []
         for layer in self.layers:
@@ -115,7 +118,11 @@ class NCCLTransformer:
                     cache_input = all_full_cache[layer_id].detach()
                     all_full_cache[layer_id] = cache_input
                     all_cache_inputs[batch_id, input_id, layer_id] = cache_input
-                    x, cache_output = self.layers[layer_id](x, cache_input, cache_len)
+                    if self.checkpoint_gradients:
+                        x, cache_output = checkpoint.CheckpointFunction.apply(self.layers[layer_id], 3, (x, cache_input, cache_len) + \
+                            tuple(self.layers[layer_id].parameters()) )
+                    else:
+                        x, cache_output = self.layers[layer_id](x, cache_input, cache_len)
                     all_cache_outputs[batch_id, input_id, layer_id] = cache_output
                 all_outputs[batch_id, input_id] = x
                 cache_len += slice_seq_len
@@ -369,6 +376,7 @@ def main():
     parser.add_argument('--use-mpi', action='store_true', default=False)
     parser.add_argument('--verify', action='store_true', default=False)
     parser.add_argument('--verbose', action='store_true', default=False)
+    parser.add_argument('--checkpoint-gradients', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -422,7 +430,7 @@ def main():
             continue
 
         if args.rank == 0:
-            run = wandb.init(project='terapipe', entity="sguo35", reinit=True)
+            run = wandb.init(project='terapipe-%s-%s' % (args.world_size, args.model), entity="sguo35", reinit=True)
 
         result["data_parallel_size"] = data_parallel_size
         if args.rank == 0:
@@ -433,7 +441,8 @@ def main():
             config, n_batch_slices, n_input_slices, distributed_init_method, args.world_size,
             data_parallel_size, model_parallel_size, pipeline_parallel_size,
             args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-            use_mpi=args.use_mpi, init_process_group=should_initialize_dist_group
+            use_mpi=args.use_mpi, init_process_group=should_initialize_dist_group,
+            checkpoint_gradients=args.checkpoint_gradients
         )
         should_initialize_dist_group = False
         # GC the last experiment run to prevent memory leaks.
