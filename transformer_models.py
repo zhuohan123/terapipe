@@ -233,10 +233,10 @@ class MultiheadLMAttentionWithCache(nn.Module):
 
                 attn = torch.bmm(attn_probs, v)
                 attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
-                attn = self.out_proj(attn)
                 return attn
-            ckpt_args = (q, k, v) + tuple(self.out_proj.parameters())
+            ckpt_args = (q, k, v)
             attn = checkpoint.CheckpointFunction.apply(attn_helper, 3, *ckpt_args)
+            attn = self.out_proj(attn)
         else:
             attn_weights = torch.bmm(q, k.transpose(1, 2))
 
