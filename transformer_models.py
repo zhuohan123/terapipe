@@ -235,7 +235,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
         if checkpoint_gradients:
             attn = checkpoint.CheckpointFunction.apply(torch.bmm, 2, *(attn_probs, v))
             attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
-            attn = checkpoint.CheckpointFunction.apply(self.out_proj, 1, *((attn,) + self.out_proj.parameters()))
+            attn = checkpoint.CheckpointFunction.apply(self.out_proj, 1, *((attn,) + tuple(self.out_proj.parameters())))
         else:
             attn = torch.bmm(attn_probs, v)
             attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
