@@ -221,35 +221,23 @@ class MultiheadLMAttentionWithCache(nn.Module):
             src_len = tgt_len
             k = new_k
             v = new_v
-
-        if checkpoint_gradients:
-            def attn_helper(q, k, v):
-                attn_weights = torch.bmm(q, k.transpose(1, 2))
-
-                assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
-                attn_weights += attn_mask[None, :, :]
-
-                attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
-
-                attn = torch.bmm(attn_probs, v)
-                attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
-                attn = self.out_proj(attn)
-                return attn
-            ckpt_args = (q, k, v) + tuple(self.out_proj.parameters())
-            attn = checkpoint.CheckpointFunction.apply(attn_helper, 3, *ckpt_args)
-        else:
+        def attn_helper(q, k, v):
             attn_weights = torch.bmm(q, k.transpose(1, 2))
 
             assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
             attn_weights += attn_mask[None, :, :]
 
-            del attn_mask
             attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
-            del attn_weights
 
             attn = torch.bmm(attn_probs, v)
             attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
             attn = self.out_proj(attn)
+            return attn
+        if checkpoint_gradients:
+            ckpt_args = (q, k, v) + tuple(self.out_proj.parameters())
+            attn = checkpoint.CheckpointFunction.apply(attn_helper, 3, *ckpt_args)
+        else:
+            attn = attn_helper(q, k, v)
         return attn, AttentionCache(new_k, new_v)
 
     def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
@@ -285,8 +273,7 @@ class TransformerLayer(nn.Module):
             ckpt_args = (x,) + tuple(self.fc1.parameters()) + tuple(self.fc2.parameters())
             x = checkpoint.CheckpointFunction.apply(attn_helper, 1, *ckpt_args)
         else:
-            x = self.fc1(x).relu_()
-            x = self.fc2(x)
+            x = attn_helper(x)
         x += y
         return x, new_attn_cache
 
