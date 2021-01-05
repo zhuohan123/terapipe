@@ -231,13 +231,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
 
             attn = torch.bmm(attn_probs, v)
             attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
-            attn = self.out_proj(attn)
             return attn
         if checkpoint_gradients:
             ckpt_args = (q, k, v) + tuple(self.out_proj.parameters())
             attn = checkpoint.CheckpointFunction.apply(attn_helper, 3, *ckpt_args)
         else:
             attn = attn_helper(q, k, v)
+        attn = self.out_proj(attn)
         return attn, AttentionCache(new_k, new_v)
 
     def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
