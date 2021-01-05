@@ -7,7 +7,7 @@ import threading
 import queue
 import mpu
 
-
+import checkpoint
 class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
     def detach(self):
         return AttentionCache(
@@ -201,7 +201,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
         ), "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
-    def forward(self, x, full_cache=None, cache_len=0):
+    def forward(self, x, full_cache=None, cache_len=0, checkpoint_gradients=False):
         tgt_len, bsz, embed_dim = x.size()
         assert embed_dim == self.embed_dim
         q, new_k, new_v = self.in_proj(x).view(tgt_len, bsz * self.num_heads, self.head_dim * 3).transpose_(0, 1).chunk(3, dim=-1)
@@ -222,15 +222,27 @@ class MultiheadLMAttentionWithCache(nn.Module):
             k = new_k
             v = new_v
 
-        attn_weights = torch.bmm(q, k.transpose(1, 2))
+        if checkpoint_gradients:
+            attn_weights = checkpoint.CheckpointFunction.apply(torch.bmm, 2, *(q, k.transpose(1, 2)))
+        else:
+            attn_weights = torch.bmm(q, k.transpose(1, 2))
         assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
         attn_weights += attn_mask[None, :, :]
         del attn_mask
         # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
         attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
-        attn = torch.bmm(attn_probs, v)
-        attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
-        attn = self.out_proj(attn)
+
+        if checkpoint_gradients:
+            def attn_helper(attn_probs, v):
+                attn = torch.bmm(attn_probs, v)
+                attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
+                attn = self.out_proj(attn)
+                return attn
+            attn = checkpoint.CheckpointFunction.apply(attn_helper, 2, *(attn_probs, v))
+        else:
+            attn = torch.bmm(attn_probs, v)
+            attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
+            attn = self.out_proj(attn)
         return attn, AttentionCache(new_k, new_v)
 
     def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
@@ -252,13 +264,23 @@ class TransformerLayer(nn.Module):
     def forward(self, x, full_cache=None, cache_len=0):
         y = x
         x = self.attn_ln(x)
-        x, new_attn_cache = self.attn(x, full_cache, cache_len)
+        x, new_attn_cache = self.attn(x, full_cache, cache_len, checkpoint_gradients=self.checkpoint_gradients)
         x += y
 
         y = x
         x = self.fc_ln(x)
-        x = self.fc1(x).relu_()
-        x = self.fc2(x)
+        if self.checkpoint_gradients:
+            ckpt_args = (x,) + tuple(self.fc1.parameters())
+            x = checkpoint.CheckpointFunction.apply(self.fc1, 1, *ckpt_args)
+            x = x.relu_()
+        else:
+            x = self.fc1(x).relu_()
+
+        if self.checkpoint_gradients:
+            ckpt_args = (x,) + tuple(self.fc2.parameters())
+            x = checkpoint.CheckpointFunction.apply(self.fc2, 1, *ckpt_args)
+        else:
+            x = self.fc2(x)
         x += y
         return x, new_attn_cache
 
@@ -290,9 +312,11 @@ class ModelParallelMultiheadLMAttentionWithCache(MultiheadLMAttentionWithCache):
 
 
 class ModelParallelTransformerLayer(TransformerLayer):
-    def __init__(self, embedding_dim, ffn_embedding_dim, num_attention_heads, device='cpu'):
+    def __init__(self, embedding_dim, ffn_embedding_dim, num_attention_heads, device='cpu',
+                checkpoint_gradients=False):
         nn.Module.__init__(self)
         self.model_parallel_size = mpu.get_model_parallel_world_size()
+        self.checkpoint_gradients = checkpoint_gradients
         assert ffn_embedding_dim % self.model_parallel_size == 0
 
         # TODO: write a custom inplace LayerNorm layer
