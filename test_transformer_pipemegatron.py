@@ -413,6 +413,7 @@ def main():
             "rank": args.rank
         }
         memory_usage = peak_memory_per_gpu(args.model, batch_size, args.world_size // 8, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
+        print("memory prediction:", memory_usage, flush=True)
         MEMORY_LIMIT = 14.0
         if args.checkpoint_gradients:
             MEMORY_LIMIT *= args.world_size
