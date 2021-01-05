@@ -223,24 +223,33 @@ class MultiheadLMAttentionWithCache(nn.Module):
             v = new_v
 
         if checkpoint_gradients:
-            attn_weights = checkpoint.CheckpointFunction.apply(torch.bmm, 2, *(q, k.transpose(1, 2)))
-        else:
-            attn_weights = torch.bmm(q, k.transpose(1, 2))
-        assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
-        attn_weights += attn_mask[None, :, :]
-        del attn_mask
-        # TODO: patch softmax to use https://stackoverflow.com/questions/53732209/torch-in-place-operations-to-save-memory-softmax
-        attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
+            def attn_helper(q, k, v, attn_mask):
+                attn_weights = torch.bmm(q, k.transpose(1, 2))
 
-        if checkpoint_gradients:
-            def attn_helper(attn_probs, v):
+                assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
+                attn_weights += attn_mask[None, :, :]
+
+                del attn_mask
+                attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
+                del attn_weights
+
                 attn = torch.bmm(attn_probs, v)
+                del attn_probs
                 attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
                 attn = self.out_proj(attn)
                 return attn
-            ckpt_args = (attn_probs, v) + tuple(self.out_proj.parameters())
-            attn = checkpoint.CheckpointFunction.apply(attn_helper, 2, *ckpt_args)
+            ckpt_args = (q, k, v, attn_mask) + tuple(self.out_proj.parameters())
+            attn = checkpoint.CheckpointFunction.apply(attn_helper, 4, *ckpt_args)
         else:
+            attn_weights = torch.bmm(q, k.transpose(1, 2))
+
+            assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
+            attn_weights += attn_mask[None, :, :]
+
+            del attn_mask
+            attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
+            del attn_weights
+
             attn = torch.bmm(attn_probs, v)
             attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
             attn = self.out_proj(attn)
