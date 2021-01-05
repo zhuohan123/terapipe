@@ -223,11 +223,11 @@ class MultiheadLMAttentionWithCache(nn.Module):
             v = new_v
 
         if checkpoint_gradients:
-            def attn_helper(q, k, v, attn_mask):
+            def attn_helper(q, k, v):
                 attn_weights = torch.bmm(q, k.transpose(1, 2))
 
                 assert attn_weights.size() == (bsz * self.num_heads, tgt_len, src_len)
-                attn_weights += attn_mask
+                attn_weights += attn_mask[None, :, :]
 
                 attn_probs = F.softmax(attn_weights, dim=-1, dtype=torch.float32).type_as(attn_weights)
 
@@ -235,8 +235,8 @@ class MultiheadLMAttentionWithCache(nn.Module):
                 attn = attn.transpose_(0, 1).contiguous().view(tgt_len, bsz, -1)
                 attn = self.out_proj(attn)
                 return attn
-            ckpt_args = (q, k, v, attn_mask[None, :, :]) + tuple(self.out_proj.parameters())
-            attn = checkpoint.CheckpointFunction.apply(attn_helper, 4, *ckpt_args)
+            ckpt_args = (q, k, v) + tuple(self.out_proj.parameters())
+            attn = checkpoint.CheckpointFunction.apply(attn_helper, 3, *ckpt_args)
         else:
             attn_weights = torch.bmm(q, k.transpose(1, 2))
 
