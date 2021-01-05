@@ -15,8 +15,6 @@ import torch.distributed as dist
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 import sys
 
-import wandb
-
 import mpu
 import nccl
 from utils import set_random_seed, timeout, TimeoutError
@@ -429,12 +427,7 @@ def main():
         if args.world_size != data_parallel_size * model_parallel_size * pipeline_parallel_size:
             continue
 
-        if args.rank == 0:
-            run = wandb.init(project='terapipe-%s-%s' % (args.world_size, args.model), entity="sguo35", reinit=True)
-
         result["data_parallel_size"] = data_parallel_size
-        if args.rank == 0:
-            wandb.config.update(result, allow_val_change=True)
 
         distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
         runner = NCCLTransformerRunner(
@@ -462,11 +455,6 @@ def main():
                 result["std_time"] = std_time
 
                 experiment_results.append(result)
-                if args.rank == 0:
-                    wandb.log({
-                        "mean_time": mean_time,
-                        "std_time": std_time
-                    })
         except (RuntimeError, TimeoutError) as e:
             del runner
             gc.collect()
