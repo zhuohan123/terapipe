@@ -119,8 +119,9 @@ class NCCLTransformer:
                     all_full_cache[layer_id] = cache_input
                     all_cache_inputs[batch_id, input_id, layer_id] = cache_input
                     if self.checkpoint_gradients:
-                        x, cache_output = checkpoint.CheckpointFunction.apply(self.layers[layer_id], 3, (x, cache_input, cache_len) + \
-                            tuple(self.layers[layer_id].parameters()) )
+                        ckpt_args = (x, cache_input, cache_len) + \
+                            tuple(self.layers[layer_id].parameters())
+                        x, cache_output = checkpoint.CheckpointFunction.apply(self.layers[layer_id], 3,  *ckpt_args)
                     else:
                         x, cache_output = self.layers[layer_id](x, cache_input, cache_len)
                     all_cache_outputs[batch_id, input_id, layer_id] = cache_output
