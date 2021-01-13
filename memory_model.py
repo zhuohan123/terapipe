@@ -21,9 +21,13 @@ def peak_memory_per_gpu(model_name,
         float: Peak memory estimated in GBs.
     """
     n_layers, hidden_size, sequence_length, num_attention_heads = MODEL_CONFIGS[model_name]
-    assert n_layers % n_nodes == 0
-    assert gpus_per_node % gpus_per_megatronlm_shard == 0
-    assert (n_nodes * gpus_per_node) % n_data_parallel_replicas == 0
+    try:
+        assert n_layers % n_nodes == 0
+        assert gpus_per_node % gpus_per_megatronlm_shard == 0
+        assert (n_nodes * gpus_per_node) % n_data_parallel_replicas == 0
+    except AssertionError as e:
+        print(e, flush=True)
+        return float('inf')
     layers_per_megatronlm_shard = n_layers / (n_nodes * gpus_per_node) * (gpus_per_megatronlm_shard * n_data_parallel_replicas)
 
     SIZEOF_FLOAT16 = 2

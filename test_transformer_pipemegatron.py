@@ -1,7 +1,11 @@
 import argparse
 import os
 import time
-from itertools import chain
+from itertools import chain, product
+from types import FunctionType
+from typing import Callable, List
+import gc
+import json
 
 from apex import optimizers
 import numpy as np
@@ -9,31 +13,35 @@ import torch
 from torch import nn
 import torch.distributed as dist
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
+import sys
 
 import mpu
 import nccl
-from utils import set_random_seed
+from utils import set_random_seed, timeout, TimeoutError
 from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, uniform_slice_batch_and_input,
     ModelParallelTransformerLayer,
 )
+from memory_model import peak_memory_per_gpu
+import checkpoint
 
 LOSS_SCALE_FACTOR = 128.0
 
-
 class NCCLTransformer:
     def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
-                 model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False):
+                 model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False, init_process_group=False,
+                 checkpoint_gradients=False):
         self.config = config
         self.n_batch_slices = n_batch_slices
         self.n_input_slices = n_input_slices
         torch.cuda.set_device(local_rank)
-        dist.init_process_group(
-            backend='nccl',
-            init_method=distributed_init_method,
-            world_size=world_size,
-            rank=rank,
-        )
+        if init_process_group:
+            dist.init_process_group(
+                backend='nccl',
+                init_method=distributed_init_method,
+                world_size=world_size,
+                rank=rank,
+            )
         dist.all_reduce(torch.zeros(1).cuda())
         mpu.initialize_model_parallel(model_parallel_size, pipeline_parallel_size)
         set_random_seed(0)
@@ -62,16 +70,18 @@ class NCCLTransformer:
                          + int(rank < config.n_layers % pipeline_parallel_size))
         self.config = config
         self.mixed_precision = mixed_precision
+        self.checkpoint_gradients = checkpoint_gradients
 
         self.layers = []
         for _ in range(self.n_layers):
             l = ModelParallelTransformerLayer(
-                config.embedding_dim,
-                config.ffn_embedding_dim,
-                config.num_attention_heads,
+                self.config.embedding_dim,
+                self.config.ffn_embedding_dim,
+                self.config.num_attention_heads,
                 device="cuda",
+                checkpoint_gradients=self.checkpoint_gradients
             )
-            self.layers.append(l.half() if mixed_precision else l)
+            self.layers.append(l.half() if self.mixed_precision else l)
 
         self.all_parameters = []
         for layer in self.layers:
@@ -266,8 +276,8 @@ class NCCLTransformerRunner(NCCLTransformer):
             self.allreduce_params()
 
         self.update_weights()
-
-    def run(self, n_steps, warmup_steps=5):
+    @timeout(seconds=500)
+    def run(self, n_steps, warmup_steps=5, verbose=True):
         all_step_times = []
         for _ in range(n_steps):
             start_time = time.time()
@@ -275,12 +285,14 @@ class NCCLTransformerRunner(NCCLTransformer):
             torch.cuda.synchronize()
             step_time = time.time() - start_time
             all_step_times.append(step_time)
-            print("rank", self.rank, "step_time:", step_time, flush=True)
+            if verbose:
+                print("rank", self.rank, "step_time:", step_time, flush=True)
         if len(all_step_times) > warmup_steps:
             print("rank", self.rank,
                   "step_time_mean:", np.mean(all_step_times[warmup_steps:]),
                   "step_time_std:", np.std(all_step_times[warmup_steps:]),
                   flush=True)
+        return np.mean(all_step_times[warmup_steps:]), np.std(all_step_times[warmup_steps:])
 
     def verify_step(self, all_inputs):
         all_outputs, all_cache_inputs, all_cache_outputs = self.forward_step(all_inputs)
@@ -336,6 +348,9 @@ class NCCLTransformerRunner(NCCLTransformer):
         for grad1, grad2 in zip(grad_list1, grad_list2):
             print(torch.abs(grad1 - grad2).mean(), grad1.size())
 
+def parse_comma_delimited_arg(arg: str, cast_fn: Callable[[str], any]) -> List[any]:
+    list_form = arg.split(',')
+    return list(map(cast_fn, list_form))
 
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM')
@@ -344,17 +359,19 @@ def main():
     parser.add_argument('--rank', metavar='I', type=int, default=0)
     parser.add_argument('--local-rank', metavar='I', type=int, default=0)
     parser.add_argument('--world-size', metavar='N', type=int, default=1)
-    parser.add_argument('--model-parallel-size', metavar='N', type=int, default=1)
-    parser.add_argument('--pipeline-parallel-size', metavar='N', type=int, default=1)
+    parser.add_argument('--model-parallel-size', metavar='N', type=str, default='1')
+    parser.add_argument('--pipeline-parallel-size', metavar='N', type=str, default='1')
     parser.add_argument('--model', metavar='NAME', type=str, default=None,
                         choices=list(MODEL_CONFIGS.keys()))
-    parser.add_argument('--batch-size', metavar='N', type=int, default=1)
-    parser.add_argument('--n-batch-slices', metavar='N', type=int, default=1)
-    parser.add_argument('--n-input-slices', metavar='N', type=int, default=1)
+    parser.add_argument('--batch-size', metavar='N', type=str, default='1')
+    parser.add_argument('--n-batch-slices', metavar='N', type=str, default='1')
+    parser.add_argument('--n-input-slices', metavar='N', type=str, default='1')
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
     parser.add_argument('--verify', action='store_true', default=False)
+    parser.add_argument('--verbose', action='store_true', default=False)
+    parser.add_argument('--checkpoint-gradients', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -362,22 +379,98 @@ def main():
         args.rank = int(os.getenv('OMPI_COMM_WORLD_RANK'))
         args.local_rank = int(os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'))
 
-    config = TransformerConfig.from_predefined_model(
-        args.model, n_devices=args.world_size, batch_size=args.batch_size)
+    args.model_parallel_size = parse_comma_delimited_arg(args.model_parallel_size, lambda x: int(x))
+    args.pipeline_parallel_size = parse_comma_delimited_arg(args.pipeline_parallel_size, lambda x: int(x))
+    args.batch_size = parse_comma_delimited_arg(args.batch_size, lambda x: int(x))
+    args.n_batch_slices = parse_comma_delimited_arg(args.n_batch_slices, lambda x: int(x))
+    args.n_input_slices = parse_comma_delimited_arg(args.n_input_slices, lambda x: int(x))
 
-    data_parallel_size = args.world_size // (args.model_parallel_size * args.pipeline_parallel_size)
-    assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
-    distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
-    runner = NCCLTransformerRunner(
-        config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
-        data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
-        args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-        use_mpi=args.use_mpi,
-    )
-    if args.verify:
-        runner.verify()
-    else:
-        runner.run(args.n_steps)
+    experiment_results = []
+
+    should_initialize_dist_group = True
+
+    for experiment in product(args.model_parallel_size, args.pipeline_parallel_size, args.batch_size, args.n_batch_slices, args.n_input_slices):
+        curr_time = time.time()
+        model_parallel_size, pipeline_parallel_size, batch_size, n_batch_slices, n_input_slices = experiment
+
+        data_parallel_size = args.world_size // (model_parallel_size * pipeline_parallel_size)
+
+        if batch_size % n_batch_slices != 0:
+            continue
+
+        result = {
+            "model": args.model,
+            "n_gpus": args.world_size,
+            "batch_size": batch_size,
+            "n_batch_slices": n_batch_slices,
+            "n_input_slices": n_input_slices,
+            "n_steps": args.n_steps,
+            "mixed_precision": args.mixed_precision,
+            "model_parallel_size": model_parallel_size,
+            "pipeline_parallel_size": pipeline_parallel_size,
+            "rank": args.rank
+        }
+        memory_usage = peak_memory_per_gpu(args.model, batch_size, args.world_size // 8, n_data_parallel_replicas=data_parallel_size, gpus_per_megatronlm_shard=model_parallel_size)
+        MEMORY_LIMIT = 14.0
+        if args.checkpoint_gradients:
+            MEMORY_LIMIT *= 2
+        if memory_usage > MEMORY_LIMIT:
+            result["mean_time"] = "OOM"
+            result["std_time"] = "OOM"
+            experiment_results.append(result)
+            continue
+
+
+        config = TransformerConfig.from_predefined_model(
+            args.model, n_devices=args.world_size, batch_size=batch_size)
+
+        if args.world_size != data_parallel_size * model_parallel_size * pipeline_parallel_size:
+            continue
+
+        result["data_parallel_size"] = data_parallel_size
+
+        distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
+        runner = NCCLTransformerRunner(
+            config, n_batch_slices, n_input_slices, distributed_init_method, args.world_size,
+            data_parallel_size, model_parallel_size, pipeline_parallel_size,
+            args.rank, args.local_rank, mixed_precision=args.mixed_precision,
+            use_mpi=args.use_mpi, init_process_group=should_initialize_dist_group,
+            checkpoint_gradients=args.checkpoint_gradients
+        )
+        should_initialize_dist_group = False
+        # GC the last experiment run to prevent memory leaks.
+        gc.collect()
+        if args.rank == 0:
+            print("""-------- Beginning run for model %s; using %d GPUs; batch size %d; batch slices %d; input slices %d; steps %d; mixed precision %r;\
+ model parallel size %d; pipeline parallel size %d --------""" % \
+                    (args.model, args.world_size, batch_size, n_batch_slices, n_input_slices, args.n_steps, args.mixed_precision,
+                        model_parallel_size, pipeline_parallel_size), flush=True)
+            print("-------- Experiment setup took %d ms --------" % ((time.time() - curr_time) * 1000), flush=True)
+        try:
+            if args.verify:
+                runner.verify()
+            else:
+                mean_time, std_time = runner.run(args.n_steps, verbose=args.verbose)
+                result["mean_time"] = mean_time
+                result["std_time"] = std_time
+
+                experiment_results.append(result)
+        except (RuntimeError, TimeoutError) as e:
+            del runner
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(e)
+            exit(1)
+            if args.rank == 0:
+                print("Configuration was OOM! Trying next one...", flush=True)
+            result["mean_time"] = "OOM"
+            result["std_time"] = "OOM"
+            experiment_results.append(result)
+            continue
+    if args.rank == 0:
+        f = open("results.json", "w")
+        json.dump(experiment_results, f)
+        f.close()
 
 
 if __name__ == "__main__":

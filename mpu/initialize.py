@@ -50,7 +50,6 @@ def initialize_model_parallel(model_parallel_size, pipeline_parallel_size=1):
                 [[  8,  9, 10, 11] -> [ 12, 13, 14, 15]]
     """
     global _INITIALIZED
-    assert not _INITIALIZED
     _INITIALIZED = True
 
     if torch.distributed.get_rank() == 0:
