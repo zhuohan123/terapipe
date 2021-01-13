@@ -31,6 +31,8 @@ _PIPELINE_PARALLEL_SIZE = None
 _MODEL_PARALLEL_GROUP = None
 _MODEL_PARALLEL_GROUP_RANK = None
 
+_PIPELINE_PARALLEL_PRED_GROUP = None
+_PIPELINE_PARALLEL_SUCC_GROUP = None
 _PIPELINE_PARALLEL_GROUP_RANK = None
 
 _DATA_PARALLEL_GROUP = None
@@ -86,11 +88,20 @@ def initialize_model_parallel(model_parallel_size, pipeline_parallel_size=1):
         group = torch.distributed.new_group(ranks)
         if i == (rank // model_parallel_size):
             _MODEL_PARALLEL_GROUP = group
-            _MODEL_PARALLEL_GROUP_RANK = i % model_parallel_size
+            _MODEL_PARALLEL_GROUP_RANK = rank % model_parallel_size
 
-    global _PIPELINE_PARALLEL_GROUP_RANK
+    global _PIPELINE_PARALLEL_PRED_GROUP, _PIPELINE_PARALLEL_SUCC_GROUP, _PIPELINE_PARALLEL_GROUP_RANK
 
     _PIPELINE_PARALLEL_GROUP_RANK = rank // model_parallel_size % pipeline_parallel_size
+    # Build the pipeline forward send group
+    for i in range(1, pipeline_parallel_size):
+        pred = i * model_parallel_size - 1
+        succ = i * model_parallel_size
+        group = torch.distributed.new_group([pred, succ])
+        if rank == pred:
+            _PIPELINE_PARALLEL_PRED_GROUP = group
+        if rank == succ:
+            _PIPELINE_PARALLEL_SUCC_GROUP = group
 
 
 def model_parallel_is_initialized():
@@ -141,6 +152,20 @@ def get_data_parallel_rank():
     """Return my rank for the data parallel group."""
     assert _INITIALIZED
     return _DATA_PARALLEL_GROUP_RANK
+
+
+def get_pipeline_parallel_pred_group():
+    """Get the pipeline parallel group in which the caller is the predecessor
+       (the sender in the forward pass)"""
+    assert _INITIALIZED
+    return _PIPELINE_PARALLEL_PRED_GROUP
+
+
+def get_pipeline_parallel_succ_group():
+    """Get the pipeline parallel group in which the caller is the successor
+       (the receiver in the forward pass)"""
+    assert _INITIALIZED
+    return _PIPELINE_PARALLEL_SUCC_GROUP
 
 
 def get_pipeline_parallel_group_rank():
