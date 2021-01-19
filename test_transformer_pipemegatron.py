@@ -120,8 +120,7 @@ class NCCLTransformer:
                 slice_seq_len = x.size(0)
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     if self.send_via_broadcast:
-                        if self.rank % self.model_parallel_size == 0:
-                            assert self.pipeline_parallel_succ_group is not None
+                        assert self.pipeline_parallel_succ_group is not None
                         dist.broadcast(x, self.model_parallel_prev_dst_rank, group=self.pipeline_parallel_succ_group)
                     else:
                         self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
@@ -138,8 +137,7 @@ class NCCLTransformer:
                 if (self.rank == self.model_parallel_dst_rank
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
                     if self.send_via_broadcast:
-                        if self.rank % self.model_parallel_size == 0:
-                            assert self.pipeline_parallel_pred_group is not None
+                        assert self.pipeline_parallel_pred_group is not None
                         dist.broadcast(x, self.model_parallel_dst_rank, group=self.pipeline_parallel_pred_group)
                     else:
                         self.comm.send_tensor(x, self.model_parallel_next_src_rank)
@@ -155,8 +153,7 @@ class NCCLTransformer:
                 if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
                     if self.rank == self.model_parallel_dst_rank:
                         if self.send_via_broadcast:
-                            if self.rank % self.model_parallel_size == 0:
-                                assert self.pipeline_parallel_pred_group is not None
+                            assert self.pipeline_parallel_pred_group is not None
                             dist.broadcast(dy, self.model_parallel_next_src_rank, group=self.pipeline_parallel_pred_group)
                         else:
                             self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
@@ -179,8 +176,7 @@ class NCCLTransformer:
                 cache_len -= slice_seq_len
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     if self.send_via_broadcast:
-                        if self.rank % self.model_parallel_size == 0:
-                            assert self.pipeline_parallel_succ_group is not None
+                        assert self.pipeline_parallel_succ_group is not None
                         dist.broadcast(dx, self.model_parallel_src_rank, group=self.pipeline_parallel_succ_group)
                     else:
                         self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
