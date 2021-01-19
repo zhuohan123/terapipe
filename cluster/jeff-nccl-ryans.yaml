@@ -4,14 +4,14 @@ cluster_name: model_parallel_cluster
 # The minimum, maximum and initial number of workers nodes to launch in addition
 # to the head node. For this project, we do not need the autoscaling, so we
 # always set these numbers the same.
-min_workers: 23
-initial_workers: 23
-max_workers: 23
+min_workers: 0
+initial_workers: 0
+max_workers: 0
 
 provider:
     type: aws
-    region: us-west-2
-    availability_zone: us-west-2b
+    region: us-east-1
+    availability_zone: us-east-1f
     cache_stopped_nodes: False
 
 auth:
@@ -19,17 +19,21 @@ auth:
 
 head_node:
     InstanceType: p3.16xlarge
-    ImageId: ami-0ab482fb6bfd3462c
+    ImageId: ami-070e03acc37ba1a87
 
     Placement:
-        GroupName: terapipe-placement-jeff
+        GroupName: terapipe-group
+    InstanceMarketOptions:
+        MarketType: spot
+        SpotOptions:
+            MaxPrice: "12.0"  # Max Hourly Price
 
 worker_nodes:
     InstanceType: p3.16xlarge
-    ImageId: ami-0ab482fb6bfd3462c
+    ImageId: ami-070e03acc37ba1a87
 
     Placement:
-        GroupName: terapipe-placement-jeff
+        GroupName: terapipe-group
 
     # Run workers on spot by default. Comment this out to use on-demand.
     InstanceMarketOptions:
