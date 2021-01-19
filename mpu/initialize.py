@@ -94,9 +94,11 @@ def initialize_model_parallel(model_parallel_size, pipeline_parallel_size=1):
 
     _PIPELINE_PARALLEL_GROUP_RANK = rank // model_parallel_size % pipeline_parallel_size
     # Build the pipeline forward send group
-    for i in range(1, pipeline_parallel_size):
-        pred = i * model_parallel_size - 1
-        succ = i * model_parallel_size
+    for i in range(1, world_size):
+        if i % model_parallel_size != 0:
+            continue
+        pred = i - 1
+        succ = i
         group = torch.distributed.new_group([pred, succ])
         if rank == pred:
             _PIPELINE_PARALLEL_PRED_GROUP = group
