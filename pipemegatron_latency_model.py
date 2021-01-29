@@ -126,8 +126,7 @@ def main():
     # We just test a single layer, since all of them are identical.
     config.n_layers = 1
 
-    data_parallel_size = args.world_size // (args.model_parallel_size * args.pipeline_parallel_size)
-    assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
+    data_parallel_size = 1
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
     runner = TerapipeLatencyModel(
         config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
@@ -139,7 +138,8 @@ def main():
     full_batch_size = args.batch_size
     inputs = []
     results = []
-
+    if args.rank == 0:
+        print(f"\n==========> model={args.model}, batch_size={args.batch_size}, seqlen={config.seq_len}\n")
     if full_batch_size > 8:
         batch_size_range = range(full_batch_size // SCAN_GRID[2], full_batch_size + 1, full_batch_size // SCAN_GRID[2])
     else:
@@ -149,6 +149,7 @@ def main():
         for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
             for attn_cache_len in range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1]):
                 inputs.append((batch_size, seqlen, attn_cache_len))
+    inputs = [x for x in inputs if x[1] + x[2] <= full_seqlen]
     inputs = list(reversed(inputs))
     for batch_size, seqlen, attn_cache_len in tqdm.tqdm(inputs):
         try:
