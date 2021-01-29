@@ -15,7 +15,7 @@ STEP_GAP = 8
 class SingleLayerLatency:
     def __init__(self, f_plus_b_array, update_array, attn_cache_linear_model):
         self.f_plus_b_array = f_plus_b_array
-        self.update_time = np.mean(update_array)
+        self._update_time = np.mean(update_array)
         self.attn_cache_linear_model = attn_cache_linear_model
 
     def predict(self, seqlen, attn_cache_len):
@@ -26,7 +26,7 @@ class SingleLayerLatency:
         return f_and_b_time + attn_time
 
     def update_time(self):
-        return self.update_time
+        return self._update_time
 
     def predict_latency_grid(self, total_batch_size, total_length):
         assert total_length % STEP_GAP == 0
