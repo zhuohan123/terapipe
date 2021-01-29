@@ -133,7 +133,7 @@ def main():
         config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
         data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-        use_mpi=args.use_mpi
+        use_mpi=args.use_mpi, init_process_group=True,
     )
     full_seqlen = config.seq_len
     full_batch_size = args.batch_size
