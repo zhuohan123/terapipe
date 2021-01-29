@@ -149,7 +149,7 @@ def main():
         for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
             for attn_cache_len in range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1]):
                 inputs.append((batch_size, seqlen, attn_cache_len))
-
+    inputs = list(reversed(inputs))
     for batch_size, seqlen, attn_cache_len in tqdm.tqdm(inputs):
         try:
             r = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
@@ -167,6 +167,7 @@ def main():
     for batch_size in (1, full_batch_size + 1):
         for seqlen in tqdm.tqdm(range(STEP_GAP, full_seqlen + 1, STEP_GAP)):
             inputs.append((batch_size, seqlen))
+    inputs = list(reversed(inputs))
     for batch_size, seqlen in tqdm.tqdm(inputs):
         r = runner.run(batch_size, seqlen, 0, args.n_steps, args.warmup_steps)
         results.append(r)
