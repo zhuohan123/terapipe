@@ -69,7 +69,7 @@ def benchmark_p2p_communication(mpi_comm, rank, model_name, size_gap=8):
 
 def get_local_ip_address():
     import socket
-    socket.gethostbyname(socket.gethostname())
+    return socket.gethostbyname(socket.gethostname())
 
 
 if __name__ == "__main__":
