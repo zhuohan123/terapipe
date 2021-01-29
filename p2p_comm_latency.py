@@ -33,7 +33,8 @@ def p2p_communication_latency(payload_size, group):
 
 
 def benchmark_p2p_communication(mpi_comm, rank, model_name, size_gap=8):
-    print(f"Measuring communication latency of {model_name}...", flush=True)
+    if rank == 7:
+        print(f"Measuring communication latency of {model_name}...", flush=True)
     _,  token_size, seqlen,  _ = MODEL_CONFIGS[model_name]
     max_tokens = seqlen * BATCH_CONFIGS[model_name]
     # we assume 2 8-GPU machines are used
