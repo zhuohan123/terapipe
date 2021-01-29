@@ -1,6 +1,6 @@
 #!/bin/bash
 N_NODES=2
-N_GPUS=2 # per node
+N_GPUS=8 # per node
 
 PYTHON_EXEC=$(which python)
 PYTHON_SCRIPT=$(realpath -s p2p_comm_latency.py)
