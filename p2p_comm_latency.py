@@ -1,86 +1,96 @@
+import json
 import os
-import sys
 import time
 
 from mpi4py import MPI
 import numpy as np
 import torch
-import nccl
+import torch.distributed as dist
+
+from transformer_models import MODEL_CONFIGS, BATCH_CONFIGS
 
 
-def benchmark(payload_size, comm, nccl_comm, rank):
-    buf_send = torch.ones(payload_size // 4, dtype=torch.float32, device='cuda')
-    buf_recv = torch.zeros(payload_size // 4, dtype=torch.float32, device='cuda')
+def p2p_communication_latency(payload_size, group):
+    buf_send = torch.ones(payload_size, dtype=torch.float16, device='cuda')
+    buf_recv = torch.zeros(payload_size, dtype=torch.float16, device='cuda')
     torch.cuda.synchronize()
-    comm.Barrier()
 
-    warmup_steps = 10
-    n_steps = 30
-    n_accum = min(max(1, int(1024*1024*1024 / payload_size)), 10)
-    single_direction_durations = []
+    # 3-30 steps
+    n_steps = int(np.clip(32 / np.log2(payload_size), 3, 30))
+    warmup_steps = n_steps
+    durations = []
     for _ in range(warmup_steps + n_steps):
         start = time.time()
-        for a in range(n_accum):
-            if rank == 0:
-                nccl_comm.send_tensor(buf_send, 2)
-            elif rank == 2:
-                nccl_comm.recv_tensor(buf_recv, 0)
+        dist.broadcast(buf_send, 7, group=group)
+        dist.broadcast(buf_recv, 8, group=group)
         torch.cuda.synchronize()
-        single_direction_durations.append(time.time() - start)
-    single_direction_durations = np.array(single_direction_durations[warmup_steps:]) / n_accum
-    mean = np.mean(single_direction_durations)
-    std = np.std(single_direction_durations)
-    if rank == 0:
-        print(f"Send finished in {mean*1000:.6f} ± {std*1000:.6f}ms", flush=True)
-    elif rank == 2:
-        print(f"Recv finished in {mean*1000:.6f} ± {std*1000:.6f}ms", flush=True)
-
-    comm.Barrier()
+        durations.append((time.time() - start) / 2)  # round trip time
+    durations = np.array(durations[warmup_steps:])
+    mean = np.mean(durations)
+    std = np.std(durations)    
     return float(mean), float(std)
 
-    double_direction_durations = []
-    for _ in range(warmup_steps + n_steps):
-        start = time.time()
-        for a in range(n_accum):
-            if rank == 0:
-                nccl_comm.send_tensor(buf_send, 2)
-            elif rank == 1:
-                nccl_comm.recv_tensor(buf_send, 3)
-            elif rank == 2:
-                nccl_comm.recv_tensor(buf_recv, 0)
-            elif rank == 3:
-                nccl_comm.send_tensor(buf_send, 1)
-        torch.cuda.synchronize()
-        double_direction_durations.append(time.time() - start)
-    double_direction_durations = np.array(double_direction_durations[warmup_steps:]) / n_accum * 1000
-    mean = np.mean(double_direction_durations)
-    std = np.std(double_direction_durations)
-    if rank == 0:
-        print(f"Send 0 finished in {mean:.6f} ± {std:.6f}ms", flush=True)
-    elif rank == 1:
-        print(f"Recv 1 finished in {mean:.6f} ± {std:.6f}ms", flush=True)
-    elif rank == 2:
-        print(f"Recv 2 finished in {mean:.6f} ± {std:.6f}ms", flush=True)
-    elif rank == 3:
-        print(f"Send 3 finished in {mean:.6f} ± {std:.6f}ms", flush=True)
+
+def benchmark_p2p_communication(mpi_comm, rank, model_name, size_gap=8):
+    _,  token_size, seqlen,  _ = MODEL_CONFIGS[model_name]
+    max_tokens = seqlen * BATCH_CONFIGS[model_name]
+    # we assume 2 8-GPU machines are used
+    send_recv_group = torch.distributed.new_group([7, 8])
+    durations_mean = []
+    durations_std = []
+
+    tensor_sizes = list(range(size_gap, max_tokens + 1, size_gap))
+    for tokens in range(size_gap, max_tokens + 1, size_gap):
+        payload_size = tokens * token_size
+        mpi_comm.Barrier()
+        if rank in (7, 8):
+            mean, std = p2p_communication_latency(payload_size, send_recv_group)
+            if rank == 7:
+                print(f"\npayload size = {payload_size}, " 
+                    f"communication finished in {mean*1000:.6f} ± {std*1000:.6f}ms",
+                    flush=True)
+                durations_mean.append(mean)
+                durations_std.append(std)
+
+    if rank == 7:
+        results = {
+            "model_name": model_name,
+            "size_gap": size_gap,
+            "tensor_sizes": tensor_sizes,
+            "mean": durations_mean,
+            "std": durations_std,
+        }
+        with open(f"{model_name}.communication_latency.json", "w") as f:
+            json.dump(results, f)
+    mpi_comm.Barrier()
+
+
+def get_local_ip_address():
+    import socket
+    socket.gethostbyname(socket.gethostname())
 
 
 if __name__ == "__main__":
-    payload_sizes = np.arange(8, 2048 + 1, 8) * 12288 * 2 #+ list(range(12288, 12288 * 2 * 2048 + 1, 12288))
-
     comm = MPI.COMM_WORLD
     world_size = comm.Get_size()
     rank = comm.Get_rank()
     local_rank = int(os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'))
 
-    torch.cuda.set_device(local_rank)
-    nccl_comm = nccl.get_nccl_communicator(local_rank, rank, world_size)
-    results = {}
-    for payload_size in payload_sizes:
-        if rank == 0:
-            print(f"\nPayload size = {payload_size}\n")
-        results[int(payload_size) // (12288 * 2)] = benchmark(payload_size, comm, nccl_comm, rank)
-    import json
     if rank == 0:
-        with open("communication_latency.json", "w") as f:
-            json.dump(results, f)
+        local_ip_address = get_local_ip_address()
+    else:
+        local_ip_address = None
+    local_ip_address = MPI.COMM_WORLD.bcast(local_ip_address, root=0)
+
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group(
+        backend='nccl',
+        init_method=f'tcp://{local_ip_address}:14399',
+        world_size=world_size,
+        rank=rank)
+    dist.all_reduce(torch.zeros(1).cuda())
+
+    benchmark_p2p_communication(comm, rank, "gpt3-1b")
+    benchmark_p2p_communication(comm, rank, "gpt3-13b")
+    benchmark_p2p_communication(comm, rank, "gpt3-44b")
+    benchmark_p2p_communication(comm, rank, "gpt3-175b")
