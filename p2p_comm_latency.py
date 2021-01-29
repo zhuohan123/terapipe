@@ -11,19 +11,17 @@ import tqdm
 from transformer_models import MODEL_CONFIGS, BATCH_CONFIGS
 
 
-def p2p_communication_latency(payload_size, group):
-    buf_send = torch.ones(payload_size, dtype=torch.float16, device='cuda')
-    buf_recv = torch.zeros(payload_size, dtype=torch.float16, device='cuda')
+def p2p_communication_latency(buf, payload_size, group):
+    buf = buf[:payload_size]
     torch.cuda.synchronize()
-
-    # 3-30 steps
-    n_steps = int(np.clip(32 / np.log2(payload_size), 3, 30))
+    # 3-10 steps
+    n_steps = int(np.clip(30 / np.log2(payload_size), 3, 10))
     warmup_steps = n_steps
     durations = []
     for _ in range(warmup_steps + n_steps):
         start = time.time()
-        dist.broadcast(buf_send, 7, group=group)
-        dist.broadcast(buf_recv, 8, group=group)
+        dist.broadcast(buf, 7, group=group)
+        dist.broadcast(buf, 8, group=group)
         torch.cuda.synchronize()
         durations.append((time.time() - start) / 2)  # round trip time
     durations = np.array(durations[warmup_steps:])
@@ -42,12 +40,14 @@ def benchmark_p2p_communication(mpi_comm, rank, model_name, size_gap=8):
     durations_mean = []
     durations_std = []
 
+    buf = torch.ones(max_tokens, dtype=torch.float16, device='cuda')
+
     tensor_sizes = list(range(size_gap, max_tokens + 1, size_gap))
     for tokens in tqdm.tqdm(tensor_sizes):
         payload_size = tokens * token_size
         mpi_comm.Barrier()
         if rank in (7, 8):
-            mean, std = p2p_communication_latency(payload_size, send_recv_group)
+            mean, std = p2p_communication_latency(buf, payload_size, send_recv_group)
             if rank == 7:
                 # print(f"\npayload size = {payload_size}, " 
                 #     f"communication finished in {mean*1000:.6f} ± {std*1000:.6f}ms",
