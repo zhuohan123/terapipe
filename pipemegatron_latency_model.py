@@ -8,7 +8,7 @@ import torch
 import tqdm
 
 from test_transformer_pipemegatron import NCCLTransformer
-from transformer_models import TransformerConfig, MODEL_CONFIGS
+from transformer_models import TransformerConfig, MODEL_CONFIGS, BATCH_CONFIGS
 from latency_model import SCAN_GRID, STEP_GAP
 
 
@@ -50,9 +50,10 @@ class TerapipeLatencyModel(NCCLTransformer):
 
         return py_forward_time, forward_time, py_backward_time, backward_time, update_time
 
-    def run(self, seqlen, attn_cache_len, n_steps, warmup_steps):
+    def run(self, batch_size, seqlen, attn_cache_len, n_steps, warmup_steps):
         # overwrite the original seqlen
         self.config.seq_len = seqlen
+        self.config.batch_size = batch_size
 
         py_forward_durations = []
         forward_durations = []
@@ -133,21 +134,29 @@ def main():
         use_mpi=args.use_mpi
     )
     full_seqlen = config.seq_len
+    full_batch_size = args.batch_size
     results = []
+
+    if full_batch_size > 8:
+        batch_size_range = range(full_batch_size // SCAN_GRID[2], full_batch_size + 1, full_batch_size // SCAN_GRID[2])
+    else:
+        batch_size_range = range(1, full_batch_size + 1)
     for attn_cache_len in tqdm.tqdm(range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1])):
-        for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
-            r = runner.run(seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
-            results.append(r)
+        for batch_size in batch_size_range:
+            for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
+                r = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
+                results.append(r)
     if args.rank == 0:
-        with open(f'{args.model}.latency_model.attn_cache_len.json', 'w') as f:
+        with open(f'{args.model}.attn_cache_len.latency_model.mp_{args.model_parallel_size}.json', 'w') as f:
             json.dump(results, f)
 
     results = []
     for seqlen in tqdm.tqdm(range(STEP_GAP, full_seqlen + 1, STEP_GAP)):
-         r = runner.run(seqlen, 0, args.n_steps, args.warmup_steps)
-         results.append(r)
+        for batch_size in (1, full_batch_size + 1):
+            r = runner.run(batch_size, seqlen, 0, args.n_steps, args.warmup_steps)
+            results.append(r)
     if args.rank == 0:
-        with open(f'{args.model}.latency_model.seqlen.json', 'w') as f:
+        with open(f'{args.model}.seqlen.latency_model.mp_{args.model_parallel_size}.json', 'w') as f:
             json.dump(results, f)
 
 

@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 
 from transformer_models import MODEL_CONFIGS
 
-SCAN_GRID = (16, 16)
+SCAN_GRID = (16, 16, 4)
 STEP_GAP = 8
 
 

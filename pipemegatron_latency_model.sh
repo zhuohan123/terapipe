@@ -1,14 +1,15 @@
 #!/bin/bash
 
-if [ "$#" -lt 3 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of gpus, model name, number of steps, [extra args] required"; exit -1; fi
-if [ "$#" -gt 4 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
+if [ "$#" -lt 4 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of gpus, model name, number of steps, [extra args] required"; exit -1; fi
+if [ "$#" -gt 5 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 
 N_NODES=1
-N_GPUS=$1 # per node
+MODEL=$1
+N_GPUS=$2 # per node
+BATCH_SIZE=$3
 MODEL_PARALLEL_SIZE=$N_GPUS
-MODEL=$2
-N_STEPS=$3
-EXTRA_ARGS=$4
+N_STEPS=$4
+EXTRA_ARGS=$5
 
 PYTHON_EXEC=$(which python)
 PYTHON_SCRIPT=$(realpath -s pipemegatron_latency_model.py)
@@ -28,6 +29,7 @@ mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
         $MY_IPADDR --port 7777 \
         --model-parallel-size ${MODEL_PARALLEL_SIZE} \
         --model ${MODEL} \
+        --batch-size ${BATCH_SIZE} \
         --n-steps ${N_STEPS} \
         --use-mpi \
         ${EXTRA_ARGS}
