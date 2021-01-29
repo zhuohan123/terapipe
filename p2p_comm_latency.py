@@ -42,7 +42,15 @@ def benchmark_p2p_communication(mpi_comm, rank, model_name, size_gap=32):
     durations_mean = []
     durations_std = []
 
-    tensor_sizes = list(range(0, max_tokens + 1, size_gap))
+    tensor_sizes = (
+        list(range(1, 2**8)) + 
+        list(range(2**8, 2**10, 2**3)) + 
+        list(range(2**10, 2**12, 2**5)) + 
+        list(range(2**12, 2**14, 2**7)) + 
+        list(range(2**14, 2**16, 2**9)) + 
+        list(range(2**16, 2**18, 2**11)))
+    tensor_sizes = [s for s in tensor_sizes if s < max_tokens] + [max_tokens]
+
     for tokens in tqdm.tqdm(tensor_sizes):
         payload_size = tokens * token_size
         mpi_comm.Barrier()
