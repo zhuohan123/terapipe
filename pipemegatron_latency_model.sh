@@ -22,10 +22,10 @@ ${ROOT_DIR}/scripts/fornode pkill python
 echo ALL_IPADDR ${ALL_IPADDR[@]}
 all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')
 
-fuser -k 7777/tcp
 
 # '--oversubscribe' enables MPI to run muliple processes per node.
 for s in 0 1 2; do
+  for p in $(ps aux | grep python | grep mixed | grep -v grep | awk '{print $2}'); do kill -9 $p; done
   mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
     --map-by ppr:$N_GPUS:node --oversubscribe -H $all_hosts \
         ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
