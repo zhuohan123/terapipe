@@ -61,14 +61,14 @@ def fit_single_layer_model(model_name):
 
     X = np.arange(STEP_GAP, seqlen+1, STEP_GAP)
     attn_cache_len_X = np.arange(seqlen // SCAN_GRID[1], seqlen + 1, seqlen // SCAN_GRID[1])
-    seqlen_X = np.arange(seqlen // SCAN_GRID[0], seqlen + 1, seqlen // SCAN_GRID[0])    
+    seqlen_X = np.arange(seqlen // SCAN_GRID[0], seqlen + 1, seqlen // SCAN_GRID[0])
 
     f_plus_b = seqlen_latency['forward_mean'] + seqlen_latency['backward_mean']
-    
+
     grid_seqlen_skip_gap = seqlen // SCAN_GRID[0]
 
     f_plus_b_for_attn_cache_len = f_plus_b[X % grid_seqlen_skip_gap == 0]
-    
+
     attn_f_plus_b = attn_cache_len_latency['forward_mean'] + attn_cache_len_latency['backward_mean']
     attn_f_plus_b = attn_f_plus_b.reshape(SCAN_GRID)
     attn_delta = attn_f_plus_b - f_plus_b_for_attn_cache_len[None, :]
@@ -79,7 +79,7 @@ def fit_single_layer_model(model_name):
     X_multiplied = (seqlen_X[None, :] * attn_cache_len_X[:, None]).ravel()
     X_data = np.stack([X_seqlen, X_attn_cache_len, X_multiplied]).transpose()
     Y_data = attn_delta.ravel()
-    
+
     X_train, X_test, y_train, y_test = train_test_split(X_data, Y_data, test_size=0.33, random_state=42)
 
     attention_cache_len_lrmodel = LinearRegression()
