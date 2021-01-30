@@ -22,6 +22,8 @@ ${ROOT_DIR}/scripts/fornode pkill python
 echo ALL_IPADDR ${ALL_IPADDR[@]}
 all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')
 
+fuser -k 7777/tcp
+
 # '--oversubscribe' enables MPI to run muliple processes per node.
 for s in 0 1 2; do
   mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
