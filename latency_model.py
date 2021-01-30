@@ -13,10 +13,11 @@ STEP_GAP = 8
 
 
 class SingleLayerLatency:
-    def __init__(self, no_content_performance, update_time, context_len_lrmodel):
+    def __init__(self, no_content_performance, update_time, context_len_lrmodel, comm_time):
         self.no_content_performance = no_content_performance
         self.update_time = update_time
         self.context_len_lrmodel = context_len_lrmodel
+        self.comm_time = comm_time
 
     def predict(self, batch_size, seqlen, context_len):
         assert seqlen % STEP_GAP == 0
@@ -39,7 +40,8 @@ class SingleLayerLatency:
         X = self._generate_model_input()
         batch, seqlen = self.no_content_performance.shape
         y = self.context_len_lrmodel.predict(X).reshape(batch, seqlen, seqlen)
-        grid = self.no_content_performance.reshape(batch, seqlen, 1) + y
+        b = self.no_content_performance + self.comm_time
+        grid = b.reshape(batch, seqlen, 1) + y
         return grid
 
 
@@ -80,7 +82,17 @@ def fit_single_layer_model(model_name, model_parallel_size):
     context_len_lrmodel.fit(X_train, y_train)
     # print(context_len_lrmodel.coef_, context_len_lrmodel.intercept_)
     print("Linear regression score:", context_len_lrmodel.score(X_test, y_test))
-    return SingleLayerLatency(no_content_performance, update_time, context_len_lrmodel)
+
+    # communication performance
+    with open(f'performance_model_data/{model_name}.communication_latency.json', 'r') as f:
+        comm_data = json.load(f)
+        xp = np.array(comm_data['tensor_sizes'])
+        yp = np.array(comm_data['mean'])
+    x = np.arange(STEP_GAP, batch_size * seqlen + 1, STEP_GAP)
+    c = np.interp(x, xp, yp).reshape(batch_size, seqlen // STEP_GAP)
+    comm_time = np.zeros((batch_size + 1, seqlen // STEP_GAP + 1))
+    comm_time[1:, 1:] = c  # pad with zero
+    return SingleLayerLatency(no_content_performance, update_time, context_len_lrmodel, comm_time)
 
 
 @numba.jit(nopython=True, parallel=True)
