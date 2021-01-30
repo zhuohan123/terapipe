@@ -23,7 +23,8 @@ echo ALL_IPADDR ${ALL_IPADDR[@]}
 all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')
 
 # '--oversubscribe' enables MPI to run muliple processes per node.
-mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
+for s in 0 1 2; do
+  mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
     --map-by ppr:$N_GPUS:node --oversubscribe -H $all_hosts \
         ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
         $MY_IPADDR --port 7777 \
@@ -31,5 +32,6 @@ mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
         --model ${MODEL} \
         --batch-size ${BATCH_SIZE} \
         --n-steps ${N_STEPS} \
-        --use-mpi \
+        --use-mpi --sort-function $s \
         ${EXTRA_ARGS}
+done

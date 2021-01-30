@@ -91,12 +91,6 @@ class TerapipeLatencyModel(NCCLTransformer):
             'update_std': np.std(update_durations),
         }
 
-
-filename = ""
-results = ""
-rank = -1
-
-
 def parse_json(r):
     results = {}
     for k, v in r.items():
@@ -135,6 +129,7 @@ def main():
     parser.add_argument('--n-batch-slices', metavar='N', type=int, default=1)
     parser.add_argument('--n-input-slices', metavar='N', type=int, default=1)
     parser.add_argument('--pipeline-parallel-size', metavar='N', type=int, default=1)
+    parser.add_argument('--sort-function', type=int, required=True)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -159,11 +154,6 @@ def main():
     full_batch_size = args.batch_size
 
     inputs = []
-    global filename
-    global results
-    global rank
-    rank = args.rank
-
     filename = f'performance_model_data/latency_model.{args.model}.mp_{args.model_parallel_size}.json'
     if os.path.exists(filename):
         with open(filename, 'r') as f:
@@ -182,8 +172,7 @@ def main():
     for batch_size in batch_size_range:
         for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
             for attn_cache_len in range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1]):
-                if seqlen + attn_cache_len <= full_seqlen:
-                    inputs.append((batch_size, seqlen, attn_cache_len))
+                inputs.append((batch_size, seqlen, attn_cache_len))
 
     # generate no context length data points
     for batch_size in range(1, full_batch_size + 1):
@@ -193,45 +182,25 @@ def main():
     # filter out existing results
     inputs = [x for x in inputs if x not in results]
     # sort with heuristics, so we only get OOMs at the end
-    inputs.sort(key=lambda x: x[0] * x[1] * (x[1] + x[2]))
+    sort_functions = [
+        lambda x: x[0] * x[1] * (x[1] + x[2]),
+        lambda x: x[0] * x[1] * x[1],
+        lambda x: x[0] * x[1] * x[2],
+    ]
+    inputs.sort(key=sort_functions[args.sort_function])
 
     for x in tqdm.tqdm(inputs):
-        if rank == 0:
-            with open(filename, 'w') as f:
-                json.dump(format_json(results), f, indent=4)
         try:
             batch_size, seqlen, attn_cache_len = x
             results[x] = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
-        except RuntimeError:
+        except RuntimeError as e:
             batch_size, seqlen, attn_cache_len = x
             print(f"OOMed with batch_size={batch_size}, seqlen={seqlen}, attn_cache_len={attn_cache_len}.")
-            results[x] = {
-                'py_forward_mean': float('inf'),
-                'forward_mean': float('inf'),
-                'py_backward_mean': float('inf'),
-                'backward_mean': float('inf'),
-                'update_mean': float('inf'),
-                'py_forward_std': float('inf'),
-                'forward_std': float('inf'),
-                'py_backward_std': float('inf'),
-                'backward_std': float('inf'),
-                'update_std': float('inf'),
-            }
+            if args.rank == 0:
+                with open(filename, 'w') as f:
+                    json.dump(format_json(results), f, indent=4)
+            raise e
 
 
 if __name__ == "__main__":
-    import signal
-    import atexit
-
-    def handle_exit():
-        global rank, results
-        print('\nsaving in ' + filename)
-        if rank == 0:
-            with open(filename, 'w') as f:
-                json.dump(format_json(results), f, indent=4)
-
-    atexit.register(handle_exit)
-    signal.signal(signal.SIGTERM, handle_exit)
-    signal.signal(signal.SIGINT, handle_exit)
-
     main()
