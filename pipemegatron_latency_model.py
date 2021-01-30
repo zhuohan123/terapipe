@@ -196,6 +196,9 @@ def main():
     inputs.sort(key=lambda x: x[0] * x[1] * (x[1] + x[2]))
 
     for x in tqdm.tqdm(inputs):
+        if rank == 0:
+            with open(filename, 'w') as f:
+                json.dump(format_json(results), f, indent=4)
         try:
             batch_size, seqlen, attn_cache_len = x
             results[x] = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
