@@ -201,8 +201,9 @@ def main():
                     json.dump(format_json(results), f, indent=4)
             raise e
 
-    with open(filename, 'w') as f:
-        json.dump(format_json(results), f, indent=4)
+    if args.rank == 0:
+        with open(filename, 'w') as f:
+            json.dump(format_json(results), f, indent=4)
 
 if __name__ == "__main__":
     main()
