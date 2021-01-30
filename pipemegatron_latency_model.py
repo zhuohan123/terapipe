@@ -136,47 +136,54 @@ def main():
     )
     full_seqlen = config.seq_len
     full_batch_size = args.batch_size
+
     inputs = []
-    results = []
+    results = {}
     if args.rank == 0:
         print(f"\n==========> model={args.model}, batch_size={args.batch_size}, seqlen={config.seq_len}\n")
+
+    # generate context length data points
     if full_batch_size > 8:
         batch_size_range = range(full_batch_size // SCAN_GRID[2], full_batch_size + 1, full_batch_size // SCAN_GRID[2])
     else:
         batch_size_range = range(1, full_batch_size + 1)
-
     for batch_size in batch_size_range:
         for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
             for attn_cache_len in range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1]):
                 inputs.append((batch_size, seqlen, attn_cache_len))
-    inputs = [x for x in inputs if x[1] + x[2] <= full_seqlen]
-    inputs = list(reversed(inputs))
-    for batch_size, seqlen, attn_cache_len in tqdm.tqdm(inputs):
-        try:
-            r = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
-            results.append(r)
-        except RuntimeError as e:
-            print(f"Failed with batch_size={batch_size}, seqlen={seqlen}, attn_cache_len={attn_cache_len}")
-            raise e
 
-    if args.rank == 0:
-        with open(f'{args.model}.attn_cache_len.latency_model.mp_{args.model_parallel_size}.json', 'w') as f:
-            json.dump({"inputs": inputs, "results": results}, f)
-
-    inputs = []
-    results = []
+    # generate no context length data points
     for batch_size in (1, full_batch_size + 1):
         for seqlen in range(STEP_GAP, full_seqlen + 1, STEP_GAP):
-            inputs.append((batch_size, seqlen))
-    inputs = list(reversed(inputs))
-    for batch_size, seqlen in tqdm.tqdm(inputs):
-        r = runner.run(batch_size, seqlen, 0, args.n_steps, args.warmup_steps)
-        results.append(r)
+            inputs.append((batch_size, seqlen, 0))
+
+    # sort with heuristics, so we only get OOMs at the end
+    inputs.sort(key=lambda x: x[0] * x[1] * (x[1] + x[2]))
+
+    for x in tqdm.tqdm(inputs):
+        try:
+            batch_size, seqlen, attn_cache_len = x
+            r = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
+            results[x] = r
+        except RuntimeError:
+            batch_size, seqlen, attn_cache_len = x
+            print(f"OOMed with batch_size={batch_size}, seqlen={seqlen}, attn_cache_len={attn_cache_len}.")
+            results[x] = {
+                'py_forward_mean': float('inf'),
+                'forward_mean': float('inf'),
+                'py_backward_mean': float('inf'),
+                'backward_mean': float('inf'),
+                'update_mean': float('inf'),
+                'py_forward_std': float('inf'),
+                'forward_std': float('inf'),
+                'py_backward_std': float('inf'),
+                'backward_std': float('inf'),
+                'update_std': float('inf'),
+            }
 
     if args.rank == 0:
-        with open(f'{args.model}.seqlen.latency_model.mp_{args.model_parallel_size}.json', 'w') as f:
-            json.dump({"inputs": inputs, "results": results}, f)
-
+        with open(f'performance_model_data/latency_model.{args.model}.mp_{args.model_parallel_size}.json', 'w') as f:
+            json.dump(results, f, indent=4)
 
 if __name__ == "__main__":
     main()
