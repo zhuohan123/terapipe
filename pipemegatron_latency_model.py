@@ -150,7 +150,8 @@ def main():
     for batch_size in batch_size_range:
         for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
             for attn_cache_len in range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1]):
-                inputs.append((batch_size, seqlen, attn_cache_len))
+                if seqlen + attn_cache_len <= full_seqlen:
+                    inputs.append((batch_size, seqlen, attn_cache_len))
 
     # generate no context length data points
     for batch_size in (1, full_batch_size + 1):
