@@ -92,6 +92,27 @@ class TerapipeLatencyModel(NCCLTransformer):
         }
 
 
+filename = ""
+results = ""
+rank = -1
+
+
+def parse_json(r):
+    results = {}
+    for k, v in r:
+        key = tuple(map(int, k.split('_')))
+        results[key] = v
+    return results
+
+
+def format_json(r):
+    results = {}
+    for k, v in r:
+        key = '_'.join(map(str, k))
+        results[key] = v
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM')
     parser.add_argument('ip_address', type=str, help='the IP address of the head node')
@@ -138,7 +159,18 @@ def main():
     full_batch_size = args.batch_size
 
     inputs = []
-    results = {}
+    global filename
+    global results
+    global rank
+    rank = args.rank
+
+    filename = f'performance_model_data/latency_model.{args.model}.mp_{args.model_parallel_size}.json'
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            results = parse_json(json.load(f))
+    else:
+        results = {}
+
     if args.rank == 0:
         print(f"\n==========> model={args.model}, batch_size={args.batch_size}, seqlen={config.seq_len}\n")
 
@@ -154,18 +186,19 @@ def main():
                     inputs.append((batch_size, seqlen, attn_cache_len))
 
     # generate no context length data points
-    for batch_size in (1, full_batch_size + 1):
+    for batch_size in range(1, full_batch_size + 1):
         for seqlen in range(STEP_GAP, full_seqlen + 1, STEP_GAP):
             inputs.append((batch_size, seqlen, 0))
 
+    # filter out existing results
+    inputs = [x for x in inputs if x not in results]
     # sort with heuristics, so we only get OOMs at the end
     inputs.sort(key=lambda x: x[0] * x[1] * (x[1] + x[2]))
 
     for x in tqdm.tqdm(inputs):
         try:
             batch_size, seqlen, attn_cache_len = x
-            r = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
-            results[x] = r
+            results[x] = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
         except RuntimeError:
             batch_size, seqlen, attn_cache_len = x
             print(f"OOMed with batch_size={batch_size}, seqlen={seqlen}, attn_cache_len={attn_cache_len}.")
@@ -184,7 +217,13 @@ def main():
 
     if args.rank == 0:
         with open(f'performance_model_data/latency_model.{args.model}.mp_{args.model_parallel_size}.json', 'w') as f:
-            json.dump(results, f, indent=4)
+            json.dump(format_json(results), f, indent=4)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print('Interrupted')
+        if rank == 0:
+            with open(filename, 'w') as f:
+                json.dump(format_json(results), f, indent=4)
