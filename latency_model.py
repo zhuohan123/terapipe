@@ -25,14 +25,21 @@ class SingleLayerLatency:
             [[batch_size * seqlen, batch_size * context_len, batch_size * seqlen * context_len]])[0]
         return no_context_time + context_time
 
-    def predict_latency_grid(self, total_batch_size, total_length):
-        assert total_length % STEP_GAP == 0
-        n_seq_slices = total_length // STEP_GAP
-        grid = np.zeros((1 + total_batch_size, 1 + n_seq_slices, 1 + n_seq_slices), dtype=np.float)
-        for batch_size in range(1, total_batch_size + 1):
-            for seqlen in range(1, n_seq_slices + 1):
-                for cachelen in range(n_seq_slices + 1):
-                    grid[batch_size, seqlen, cachelen] = self.predict(batch_size, seqlen * STEP_GAP, cachelen * STEP_GAP)
+    def _generate_model_input(self):
+        batch, seqlen = self.no_content_performance.shape
+        x, y, z = np.where(np.ones((batch, seqlen, seqlen)))
+        y *= STEP_GAP
+        z *= STEP_GAP
+        u = x * y * z
+        y *= x
+        z *= x
+        return np.stack([y, z, u]).transpose()
+
+    def predict_latency_grid(self):
+        X = self._generate_model_input()
+        batch, seqlen = self.no_content_performance.shape
+        y = self.context_len_lrmodel.predict(X).reshape(batch, seqlen, seqlen)
+        grid = self.no_content_performance.reshape(batch, seqlen, 1) + y
         return grid
 
 
@@ -145,11 +152,11 @@ def evaluate_split(latency_model, split_scheme, pipelinelen):
 
 if __name__ == "__main__":
     # analysis_model('gpt3-175b')
-    single_layer_model = fit_single_layer_model('gpt3-175b')
+    single_layer_model = fit_single_layer_model('gpt3-175b', 8)
     total_batch_size = 2
     seqlen = 2048
     pipelinelen = 48
-    time_grid = single_layer_model.predict_latency_grid(total_batch_size, seqlen)
+    time_grid = single_layer_model.predict_latency_grid()
     all_possible_latencies = np.sort(np.unique(time_grid))
     best_latency = np.inf
     best_scheme = None
