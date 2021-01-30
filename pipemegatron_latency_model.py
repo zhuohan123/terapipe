@@ -215,15 +215,20 @@ def main():
                 'update_std': float('inf'),
             }
 
-    if args.rank == 0:
-        with open(f'performance_model_data/latency_model.{args.model}.mp_{args.model_parallel_size}.json', 'w') as f:
-            json.dump(format_json(results), f, indent=4)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print('Interrupted')
+    import signal
+    import atexit
+
+    def handle_exit():
+        global rank, results
+        print('\nsaving in ' + filename)
         if rank == 0:
             with open(filename, 'w') as f:
                 json.dump(format_json(results), f, indent=4)
+
+    atexit.register(handle_exit)
+    signal.signal(signal.SIGTERM, handle_exit)
+    signal.signal(signal.SIGINT, handle_exit)
+
+    main()
