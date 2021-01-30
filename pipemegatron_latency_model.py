@@ -99,7 +99,7 @@ rank = -1
 
 def parse_json(r):
     results = {}
-    for k, v in r:
+    for k, v in r.items():
         key = tuple(map(int, k.split('_')))
         results[key] = v
     return results
@@ -107,7 +107,7 @@ def parse_json(r):
 
 def format_json(r):
     results = {}
-    for k, v in r:
+    for k, v in r.items():
         key = '_'.join(map(str, k))
         results[key] = v
     return results
