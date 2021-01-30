@@ -166,7 +166,7 @@ def main():
     inputs = []
     results = []
     for batch_size in (1, full_batch_size + 1):
-        for seqlen in tqdm.tqdm(range(STEP_GAP, full_seqlen + 1, STEP_GAP)):
+        for seqlen in range(STEP_GAP, full_seqlen + 1, STEP_GAP):
             inputs.append((batch_size, seqlen))
     inputs = list(reversed(inputs))
     for batch_size, seqlen in tqdm.tqdm(inputs):
