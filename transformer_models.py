@@ -61,8 +61,8 @@ MODEL_CONFIGS = {
 }
 
 BATCH_CONFIGS = {
-    "gpt3-1b": 128,
-    "gpt3-13b": 48,
+    "gpt3-1b": 72,
+    "gpt3-13b": 32,
     "gpt3-44b": 16,
     "gpt3-175b": 2,
 }
