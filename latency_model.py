@@ -13,7 +13,7 @@ STEP_GAP = 8
 
 
 class SingleLayerLatency:
-    def __init__(self, no_content_performance, update_time, context_len_lrmodel, comm_time):
+    def __init__(self, no_content_performance, update_time, context_len_lrmodel, comm_time, layers_per_stage):
         self.no_content_performance = no_content_performance
         self.update_time = update_time
         self.context_len_lrmodel = context_len_lrmodel
@@ -22,16 +22,13 @@ class SingleLayerLatency:
         # generate latency grid
         X = self._generate_model_input()
         batch, seqlen = self.no_content_performance.shape
-        y = self.context_len_lrmodel.predict(X).reshape(batch, seqlen, seqlen)
-        b = self.no_content_performance + self.comm_time * 2
+        y = self.context_len_lrmodel.predict(X).reshape(batch, seqlen, seqlen) * layers_per_stage
+        b = self.no_content_performance * layers_per_stage + self.comm_time * 2
         self.latency_grid = b.reshape(batch, seqlen, 1) + y
 
     def predict(self, batch_size, seqlen, context_len):
         assert seqlen % STEP_GAP == 0
-        no_context_time = self.no_content_performance[seqlen // STEP_GAP - 1]
-        context_time = self.context_len_lrmodel.predict(
-            [[batch_size * seqlen, batch_size * context_len, batch_size * seqlen * context_len]])[0]
-        return no_context_time + context_time
+        return self.latency_grid[batch_size, seqlen // 8, context_len // 8]
 
     def _generate_model_input(self):
         batch, seqlen = self.no_content_performance.shape
@@ -52,7 +49,7 @@ def parse_json(r):
     return results
 
 
-def fit_single_layer_model(model_name, model_parallel_size):
+def fit_single_layer_model(model_name, model_parallel_size, layers_per_node):
     with open(f'performance_model_data/latency_model.{model_name}.mp_{model_parallel_size}.json', 'r') as f:
         data = parse_json(json.load(f))
     # data: (batch_size, seqlen, attention_cache_len) -> time
@@ -91,7 +88,7 @@ def fit_single_layer_model(model_name, model_parallel_size):
     c = np.interp(x, xp, yp).reshape(batch_size, seqlen // STEP_GAP)
     comm_time = np.zeros((batch_size + 1, seqlen // STEP_GAP + 1))
     comm_time[1:, 1:] = c  # pad with zero
-    return SingleLayerLatency(no_content_performance, update_time, context_len_lrmodel, comm_time)
+    return SingleLayerLatency(no_content_performance, update_time, context_len_lrmodel, comm_time, layers_per_node)
 
 
 @numba.jit(nopython=True, parallel=True)
@@ -149,25 +146,30 @@ def planning(latency_grid, total_batch_size, total_seqlen, pipelinelen, max_late
     return final_time, all_slice_scheme
 
 
-def evaluate_split(latency_model, split_scheme, pipelinelen):
-    cache_len = 0
+def evaluate_split(latency_model, split_scheme, pipelinelen, layers_per_node):
     total_time = 0
     largest_time = 0
-    for split in split_scheme:
-        split_time = latency_model.predict(split, cache_len)
-        total_time += split_time
-        cache_len += split
-        largest_time = max(largest_time, split_time)
-    return total_time + (pipelinelen - 1) * largest_time
+    for batch_size, seq_splits in split_scheme:
+        cache_len = 0
+        for seq_len in seq_splits:
+            split_time = latency_model.predict(batch_size, seq_len, cache_len)
+            total_time += split_time
+            cache_len += seq_len
+            largest_time = max(largest_time, split_time)
+    return total_time + (pipelinelen - 1) * largest_time + latency_model.update_time * layers_per_node
 
 
 if __name__ == "__main__":
     # analysis_model('gpt3-175b')
-    single_layer_model = fit_single_layer_model('gpt3-175b', 8)
     total_batch_size = 2
     seqlen = 2048
     pipelinelen = 48
-    time_grid = single_layer_model.latency_grid
+    n_layers = MODEL_CONFIGS['gpt3-175b'][0]
+    layers_per_node = n_layers // pipelinelen
+
+    latency_model = fit_single_layer_model('gpt3-175b', 8, layers_per_node)
+    time_grid = latency_model.latency_grid
+
     all_possible_latencies = np.sort(np.unique(time_grid))
     best_latency = np.inf
     best_scheme = None
@@ -180,4 +182,6 @@ if __name__ == "__main__":
         if latency < best_latency:
             best_latency = latency
             best_scheme = all_split_scheme
-            print(best_latency, best_scheme, len(best_scheme))
+            best_latency += layers_per_node * latency_model.update_time
+            print(best_latency, best_scheme, len(best_scheme),
+                  evaluate_split(latency_model, best_scheme, pipelinelen, layers_per_node))
