@@ -109,7 +109,7 @@ def planning(latency_grid, total_batch_size, total_seqlen, pipelinelen, max_late
                 if step_latency <= max_latency and total_time < f[bs, acc_nslices]:
                     f[bs, acc_nslices] = total_time
                     f_step[bs, acc_nslices] = step_nslices
-                    f_max_latency[bs, acc_nslices] = max(f_max_latency[bs, acc_nslices], step_latency)
+                    f_max_latency[bs, acc_nslices] = max(f_max_latency[bs, acc_nslices - step_nslices], step_latency)
 
     f_last = f[:, total_nslices]
     f_last_max_latency = f_max_latency[:, total_nslices]
@@ -126,7 +126,7 @@ def planning(latency_grid, total_batch_size, total_seqlen, pipelinelen, max_late
             if total_time < g[acc_bs]:
                 g[acc_bs] = total_time
                 g_step[acc_bs] = bs
-                g_max_latency[acc_bs] = max(g_max_latency[acc_bs], f_last_max_latency[bs])
+                g_max_latency[acc_bs] = max(g_max_latency[acc_bs - bs], f_last_max_latency[bs])
 
     final_time = (pipelinelen - 1) * g_max_latency[total_batch_size] + g[total_batch_size]
     if final_time == np.inf:
@@ -179,9 +179,9 @@ if __name__ == "__main__":
         latency, all_split_scheme = planning(time_grid, total_batch_size, seqlen, pipelinelen, max_latency)
         if all_split_scheme is not None:
             all_split_scheme = [(batch_size, list(reversed(split_scheme))) for batch_size, split_scheme in all_split_scheme]
+        latency += layers_per_node * latency_model.update_time
         if latency < best_latency:
             best_latency = latency
             best_scheme = all_split_scheme
-            best_latency += layers_per_node * latency_model.update_time
             print(best_latency, best_scheme, len(best_scheme),
                   evaluate_split(latency_model, best_scheme, pipelinelen, layers_per_node))
