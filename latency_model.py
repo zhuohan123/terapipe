@@ -19,6 +19,13 @@ class SingleLayerLatency:
         self.context_len_lrmodel = context_len_lrmodel
         self.comm_time = comm_time
 
+        # generate latency grid
+        X = self._generate_model_input()
+        batch, seqlen = self.no_content_performance.shape
+        y = self.context_len_lrmodel.predict(X).reshape(batch, seqlen, seqlen)
+        b = self.no_content_performance + self.comm_time * 2
+        self.latency_grid = b.reshape(batch, seqlen, 1) + y
+
     def predict(self, batch_size, seqlen, context_len):
         assert seqlen % STEP_GAP == 0
         no_context_time = self.no_content_performance[seqlen // STEP_GAP - 1]
@@ -35,14 +42,6 @@ class SingleLayerLatency:
         y *= x
         z *= x
         return np.stack([y, z, u]).transpose()
-
-    def predict_latency_grid(self):
-        X = self._generate_model_input()
-        batch, seqlen = self.no_content_performance.shape
-        y = self.context_len_lrmodel.predict(X).reshape(batch, seqlen, seqlen)
-        b = self.no_content_performance + self.comm_time
-        grid = b.reshape(batch, seqlen, 1) + y
-        return grid
 
 
 def parse_json(r):
@@ -168,7 +167,7 @@ if __name__ == "__main__":
     total_batch_size = 2
     seqlen = 2048
     pipelinelen = 48
-    time_grid = single_layer_model.predict_latency_grid()
+    time_grid = single_layer_model.latency_grid
     all_possible_latencies = np.sort(np.unique(time_grid))
     best_latency = np.inf
     best_scheme = None
