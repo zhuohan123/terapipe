@@ -95,7 +95,7 @@ def main():
         result["std_time"] = std_time
         experiment_results.append(result)
     if rank == 0:
-        with open("dp_evaluation_results.json", "w") as f:
+        with open(f"{model_name}-dp_evaluation_results.json", "w") as f:
             json.dump(experiment_results, f)
 
 
