@@ -189,10 +189,13 @@ def main():
     ]
     inputs.sort(key=sort_functions[args.sort_function])
 
-    for x in tqdm.tqdm(inputs):
+    for i, x in enumerate(tqdm.tqdm(inputs)):
         try:
             batch_size, seqlen, attn_cache_len = x
             results[x] = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
+            if args.rank == 0 and (i + 1) % 100 == 0:
+                 with open(filename, 'w') as f:
+                    json.dump(format_json(results), f, indent=4)
         except RuntimeError as e:
             batch_size, seqlen, attn_cache_len = x
             print(f"OOMed with batch_size={batch_size}, seqlen={seqlen}, attn_cache_len={attn_cache_len}.")
