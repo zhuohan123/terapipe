@@ -45,7 +45,9 @@ def main():
     data_parallel_size = experiment['data_parallel_size']
     batch_slices = experiment['batch_slices']
     input_slices = experiment['input_slices']
-    assert data_parallel_size == world_size // (model_parallel_size * pipeline_parallel_size)
+    if rank == 0:
+        print(experiment, f"index={args.index}")
+    assert data_parallel_size == world_size // (model_parallel_size * pipeline_parallel_size), (data_parallel_size, world_size, model_parallel_size * pipeline_parallel_size)
     assert world_size == data_parallel_size * model_parallel_size * pipeline_parallel_size
     result = {
         "model": model_name,
