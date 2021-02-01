@@ -94,14 +94,15 @@ def initialize_model_parallel(model_parallel_size, pipeline_parallel_size=1):
 
     _PIPELINE_PARALLEL_GROUP_RANK = rank // model_parallel_size % pipeline_parallel_size
     # Build the pipeline forward send group
-    for i in range(1, pipeline_parallel_size):
-        pred = i * model_parallel_size - 1
-        succ = i * model_parallel_size
-        group = torch.distributed.new_group([pred, succ])
-        if rank == pred:
-            _PIPELINE_PARALLEL_PRED_GROUP = group
-        if rank == succ:
-            _PIPELINE_PARALLEL_SUCC_GROUP = group
+    for j in range(0, _DATA_PARALLEL_SIZE):
+        for i in range(1, pipeline_parallel_size):
+            pred = j * total_model_parallel_size + i * model_parallel_size - 1
+            succ = j * total_model_parallel_size + i * model_parallel_size
+            group = torch.distributed.new_group([pred, succ])
+            if rank == pred:
+                _PIPELINE_PARALLEL_PRED_GROUP = group
+            if rank == succ:
+                _PIPELINE_PARALLEL_SUCC_GROUP = group
 
 
 def model_parallel_is_initialized():
