@@ -69,7 +69,9 @@ def fit_single_layer_model(model_name, model_parallel_size, layers_per_node):
     y = []
     for (b, s, c), t in context_len_data.items():
         X.append([b*s, b*c, b*s*c])
-        y.append(t['forward_mean'] + t['backward_mean'] - no_content_performance[b, s // STEP_GAP])
+        ty = t['forward_mean'] + t['backward_mean'] - no_content_performance[b, s // STEP_GAP]
+        if not np.isinf(ty) and not np.isnan(ty):
+            y.append(ty)
 
     X = np.array(X)
     y = np.array(y)
@@ -171,9 +173,14 @@ def analysis_model(model_name, total_batch_size, model_parallel_size, pipelinele
     all_possible_latencies = np.sort(np.unique(time_grid))
     best_latency = np.inf
     best_scheme = None
+    gap = 1e-5
+    last_latency = 0
     for max_latency in tqdm.tqdm(all_possible_latencies):
         if max_latency * pipelinelen > best_latency:
             break
+        if max_latency - last_latency < gap:
+            continue
+        last_latency = max_latency
         latency, all_split_scheme = planning(time_grid, total_batch_size, seqlen, pipelinelen, max_latency)
         if all_split_scheme is not None:
             all_split_scheme = [(batch_size, list(reversed(split_scheme))) for batch_size, split_scheme in all_split_scheme]
@@ -181,9 +188,39 @@ def analysis_model(model_name, total_batch_size, model_parallel_size, pipelinele
         if latency < best_latency:
             best_latency = latency
             best_scheme = all_split_scheme
-            print(best_latency, best_scheme, len(best_scheme),
+    print(best_latency, best_scheme, len(best_scheme),
                   evaluate_split(latency_model, best_scheme, pipelinelen, layers_per_node))
+    return best_scheme, best_latency
+
+
+inputs = [
+    ('gpt3-1b', 8,  1, 24),
+    ('gpt3-1b', 16, 1, 24),
+    ('gpt3-1b', 36, 8, 12),
+    ('gpt3-1b', 48, 8, 24),
+    ('gpt3-1b', 48, 8, 12),
+    ('gpt3-1b', 72, 8, 24),
+
+    ('gpt3-13b',2,  1, 40),
+    ('gpt3-13b',4,  1, 40),
+    ('gpt3-13b',7,  1, 40),
+    ('gpt3-13b',12, 8, 20),
+    ('gpt3-13b',16, 8, 20),
+    ('gpt3-13b',20, 8, 40),
+    ('gpt3-13b',20, 8, 20),
+    ('gpt3-13b',32, 8, 40),
+
+    ('gpt3-44b', 8, 8, 48),
+    ('gpt3-44b', 4, 8, 24),
+    ('gpt3-44b', 2, 1, 96),
+
+    ('gpt3-175b', 2, 8, 48),
+    ('gpt3-175b', 2, 4, 96),
+]
 
 
 if __name__ == "__main__":
-    analysis_model('gpt3-13b', total_batch_size=32, model_parallel_size=8, pipelinelen=40)
+    for x in inputs:
+        print("\n" + "=" * 30)
+        print(f"model_name={x[0]}, total_batch_size={x[1]}, model_parallel_size={x[2]}, pipelinelen={x[3]}")
+        analysis_model(*x)
