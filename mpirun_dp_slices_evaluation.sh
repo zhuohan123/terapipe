@@ -1,9 +1,10 @@
 #!/bin/bash
-if [ "$#" -lt 3 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, number of gpus per node, model name required"; exit -1; fi
-if [ "$#" -gt 3 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
+if [ "$#" -lt 4 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, number of gpus per node, model name, setting index required"; exit -1; fi
+if [ "$#" -gt 4 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 N_NODES=$1
 N_GPUS=$2 # per node
 MODEL=$3
+INDEX=$4
 
 PYTHON_EXEC=/home/ubuntu/anaconda3/bin/python
 PYTHON_SCRIPT=$(realpath -s dp_slices_evaluation.py)
@@ -21,6 +22,6 @@ for p in $(ps aux | grep python | grep 7777 | grep model | grep -v grep | awk '{
 # '--oversubscribe' enables MPI to run muliple processes per node.
 /home/ubuntu/anaconda3/bin/mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
     --map-by ppr:$N_GPUS:node --oversubscribe -H $all_hosts \
-        ${PYTHON_EXEC} ${PYTHON_SCRIPT} \
+        $PYTHON_EXEC $PYTHON_SCRIPT \
         $MY_IPADDR -p 7777 \
-        --model-name ${MODEL}
+        --model-name $MODEL --index $INDEX
