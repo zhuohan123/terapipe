@@ -107,8 +107,13 @@ def mem_report():
     print('='*LEN)
 
 
+def uniform_slice(length, n_slices):
+    return [length // n_slices + int(i < length % n_slices) for i in range(n_slices)]
+
+
 __all__ = [
     'suppress_output',
     'set_random_seed',
-    'mem_report'
+    'mem_report',
+    'uniform_slice'
 ]

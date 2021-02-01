@@ -407,24 +407,6 @@ def uniform_slice_x(x, n_slices):
     return sliced_x
 
 
-def uniform_slice_batch_and_input(x, n_batch_slices, n_input_slices):
-    seq_len, batch_size, _ = x.size()
-    sliced_batch = np.empty((n_batch_slices, n_input_slices), dtype='O')
-    start_batch_index = 0
-    for i in range(n_batch_slices):
-        batch_size_slice = batch_size // n_batch_slices + int(i < batch_size % n_batch_slices)
-        start_input_index = 0
-        for j in range(n_input_slices):
-            seq_len_slice = seq_len // n_input_slices + int(j < seq_len % n_input_slices)
-            sliced_batch[i, j] = (x[start_input_index:start_input_index + seq_len_slice,
-                                  start_batch_index:start_batch_index + batch_size_slice].contiguous())
-            start_input_index += seq_len_slice
-        assert start_input_index == seq_len
-        start_batch_index += batch_size_slice
-    assert start_batch_index == batch_size
-    return sliced_batch
-
-
 def uniform_slice_layers(transformer_layers, n_devices=None):
     n_layers = len(transformer_layers)
     n_devices = n_devices if n_devices else torch.cuda.device_count()
@@ -436,3 +418,20 @@ def uniform_slice_layers(transformer_layers, n_devices=None):
         layer_idx += n_layers_device
     assert layer_idx == n_layers
     return nested_layers
+
+
+def grid_slice_batch_and_sequence(x, batch_slices, seq_slices, requires_grad=False):
+    seq_len, batch_size, _ = x.size()
+    sliced_batch = np.empty((len(batch_slices), len(seq_slices)), dtype='O')
+    start_batch_index = 0
+    for i, batch_size_slice in enumerate(batch_slices):
+        start_input_index = 0
+        for j, seq_len_slice in enumerate(seq_slices):
+            sliced_batch[i, j] = (x[start_input_index:start_input_index + seq_len_slice,
+                                  start_batch_index:start_batch_index + batch_size_slice].contiguous())
+            sliced_batch[i, j].requires_grad_(requires_grad)
+            start_input_index += seq_len_slice
+        assert start_input_index == seq_len
+        start_batch_index += batch_size_slice
+    assert start_batch_index == batch_size
+    return sliced_batch

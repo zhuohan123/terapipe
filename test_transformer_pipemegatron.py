@@ -17,9 +17,9 @@ import sys
 
 import mpu
 import nccl
-from utils import set_random_seed, timeout, TimeoutError
+from utils import set_random_seed, timeout, TimeoutError, uniform_slice
 from transformer_models import (
-    TransformerConfig, MODEL_CONFIGS, uniform_slice_batch_and_input,
+    TransformerConfig, MODEL_CONFIGS, grid_slice_batch_and_sequence,
     ModelParallelTransformerLayer,
 )
 from memory_model import peak_memory_per_gpu
@@ -28,12 +28,12 @@ import checkpoint
 LOSS_SCALE_FACTOR = 128.0
 
 class NCCLTransformer:
-    def __init__(self, config, n_batch_slices, n_input_slices, distributed_init_method, world_size, data_parallel_size,
+    def __init__(self, config, batch_slices, seq_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False,
                  init_process_group=False, checkpoint_gradients=False, send_via_broadcast=True):
         self.config = config
-        self.n_batch_slices = n_batch_slices
-        self.n_input_slices = n_input_slices
+        self.batch_slices = batch_slices
+        self.seq_slices = seq_slices
         torch.cuda.set_device(local_rank)
         if init_process_group:
             dist.init_process_group(
@@ -101,6 +101,14 @@ class NCCLTransformer:
             self.optimizer = optimizers.FusedAdam(self.master_parameters, lr=1e-10)
         else:
             self.optimizer = torch.optim.Adam(self.all_parameters, lr=1e-10)
+
+    @property
+    def n_batch_slices(self):
+        return len(self.batch_slices)
+
+    @property
+    def n_input_slices(self):
+        return len(self.seq_slices)
 
     def forward_step(self, all_inputs, initial_cache_len=0):
         all_cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices, self.n_layers), dtype='O')
@@ -194,11 +202,7 @@ class NCCLTransformer:
 
         if self.mixed_precision:
             input_x = input_x.half()
-        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
-        for batch_id in range(self.n_batch_slices):
-            for input_id in range(self.n_input_slices):
-                sliced_x[batch_id, input_id].requires_grad_(True)
-        return sliced_x
+        return grid_slice_batch_and_sequence(input_x, self.batch_slices, self.seq_slices, requires_grad=True)
 
     def prepare_grad_x(self, all_outputs):
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
@@ -212,13 +216,12 @@ class NCCLTransformer:
             if self.mixed_precision:
                 loss = loss.float().mul(LOSS_SCALE_FACTOR).half()
             sliced_grad_x = torch.autograd.grad(loss, all_outputs.ravel())
-            sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(
-                self.n_batch_slices, self.n_input_slices)
+            sliced_grad_x = np.array(sliced_grad_x, dtype='O').reshape(len(self.batch_slices), len(self.seq_slices))
         else:
             grad_x = self.config.create_inputs_empty()
             if self.mixed_precision:
                 grad_x = grad_x.half()
-            sliced_grad_x = uniform_slice_batch_and_input(grad_x, self.n_batch_slices, self.n_input_slices)
+            sliced_grad_x = grid_slice_batch_and_sequence(grad_x, self.batch_slices, self.seq_slices)
             del grad_x
         return sliced_grad_x
 
@@ -351,21 +354,15 @@ class NCCLTransformerRunner(NCCLTransformer):
 
         if self.mixed_precision:
             input_x = input_x.half()
-        sliced_x = uniform_slice_batch_and_input(input_x, self.n_batch_slices, self.n_input_slices)
-        for batch_id in range(self.n_batch_slices):
-            for input_id in range(self.n_input_slices):
-                sliced_x[batch_id, input_id].requires_grad_(True)
+        sliced_x = grid_slice_batch_and_sequence(input_x, self.batch_slices, self.seq_slices, requires_grad=True)
         grad_list1 = self.verify_step(sliced_x)
         if self.mixed_precision:
             self.optimizer.zero_grad()
         else:
             self.optimizer.zero_grad(set_to_none=True)
-        self.n_batch_slices = 1
-        self.n_input_slices = 1
-        sliced_x = uniform_slice_batch_and_input(input_x.clone(), self.n_batch_slices, self.n_input_slices)
-        for batch_id in range(self.n_batch_slices):
-            for input_id in range(self.n_input_slices):
-                sliced_x[batch_id, input_id].requires_grad_(True)
+        self.batch_slices = [sum(self.batch_slices)]
+        self.seq_slices = [sum(self.seq_slices)]
+        sliced_x = grid_slice_batch_and_sequence(input_x.clone(), self.batch_slices, self.seq_slices, requires_grad=True)
         grad_list2 = self.verify_step(sliced_x)
         for grad1, grad2 in zip(grad_list1, grad_list2):
             print(torch.abs(grad1 - grad2).mean(), grad1.size())
@@ -452,8 +449,10 @@ def main():
         result["data_parallel_size"] = data_parallel_size
 
         distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
+        seq_slices = uniform_slice(config.seq_len, n_input_slices)
+        batch_slices = uniform_slice(batch_size, n_batch_slices)
         runner = NCCLTransformerRunner(
-            config, n_batch_slices, n_input_slices, distributed_init_method, args.world_size,
+            config, batch_slices, seq_slices, distributed_init_method, args.world_size,
             data_parallel_size, model_parallel_size, pipeline_parallel_size,
             args.rank, args.local_rank, mixed_precision=args.mixed_precision,
             use_mpi=args.use_mpi, init_process_group=should_initialize_dist_group,
