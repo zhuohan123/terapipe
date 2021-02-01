@@ -46,7 +46,7 @@ def main():
         assert data_parallel_size == world_size // (model_parallel_size * pipeline_parallel_size)
         assert world_size == data_parallel_size * model_parallel_size * pipeline_parallel_size
         result = {
-            "model": args.model,
+            "model": model_name,
             "n_gpus": world_size,
             "batch_size": batch_size,
             "batch_slices": batch_slices,
