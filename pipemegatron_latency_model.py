@@ -1,4 +1,5 @@
 import argparse
+import gc
 import json
 import os
 import time
@@ -8,7 +9,7 @@ import torch
 import tqdm
 
 from test_transformer_pipemegatron import NCCLTransformer
-from transformer_models import TransformerConfig, MODEL_CONFIGS
+from transformer_models import TransformerConfig, MODEL_CONFIGS, BATCH_CONFIGS
 from latency_model import SCAN_GRID, STEP_GAP
 
 
@@ -50,9 +51,11 @@ class TerapipeLatencyModel(NCCLTransformer):
 
         return py_forward_time, forward_time, py_backward_time, backward_time, update_time
 
-    def run(self, seqlen, attn_cache_len, n_steps, warmup_steps):
+    def run(self, batch_size, seqlen, attn_cache_len, n_steps, warmup_steps):
+        gc.collect()
         # overwrite the original seqlen
         self.config.seq_len = seqlen
+        self.config.batch_size = batch_size
 
         py_forward_durations = []
         forward_durations = []
@@ -88,6 +91,21 @@ class TerapipeLatencyModel(NCCLTransformer):
             'update_std': np.std(update_durations),
         }
 
+def parse_json(r):
+    results = {}
+    for k, v in r.items():
+        key = tuple(map(int, k.split('_')))
+        results[key] = v
+    return results
+
+
+def format_json(r):
+    results = {}
+    for k, v in r.items():
+        key = '_'.join(map(str, k))
+        results[key] = v
+    return results
+
 
 def main():
     parser = argparse.ArgumentParser(description='Pipeline + Megatron-LM')
@@ -111,6 +129,7 @@ def main():
     parser.add_argument('--n-batch-slices', metavar='N', type=int, default=1)
     parser.add_argument('--n-input-slices', metavar='N', type=int, default=1)
     parser.add_argument('--pipeline-parallel-size', metavar='N', type=int, default=1)
+    parser.add_argument('--sort-function', type=int, required=True)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -123,33 +142,68 @@ def main():
     # We just test a single layer, since all of them are identical.
     config.n_layers = 1
 
-    data_parallel_size = args.world_size // (args.model_parallel_size * args.pipeline_parallel_size)
-    assert args.world_size == data_parallel_size * args.model_parallel_size * args.pipeline_parallel_size
+    data_parallel_size = 1
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
     runner = TerapipeLatencyModel(
         config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
         data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, mixed_precision=args.mixed_precision,
-        use_mpi=args.use_mpi
+        use_mpi=args.use_mpi, init_process_group=True,
     )
     full_seqlen = config.seq_len
-    results = []
-    for attn_cache_len in tqdm.tqdm(range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1])):
+    full_batch_size = args.batch_size
+
+    inputs = []
+    filename = f'performance_model_data/latency_model.{args.model}.mp_{args.model_parallel_size}.json'
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            results = parse_json(json.load(f))
+    else:
+        results = {}
+
+    if args.rank == 0:
+        print(f"\n==========> model={args.model}, batch_size={args.batch_size}, seqlen={config.seq_len}\n")
+
+    # generate context length data points
+    if full_batch_size > 8:
+        batch_size_range = range(full_batch_size // SCAN_GRID[2], full_batch_size + 1, full_batch_size // SCAN_GRID[2])
+    else:
+        batch_size_range = range(1, full_batch_size + 1)
+    for batch_size in batch_size_range:
         for seqlen in range(full_seqlen // SCAN_GRID[0], full_seqlen + 1, full_seqlen // SCAN_GRID[0]):
-            r = runner.run(seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
-            results.append(r)
-    if args.rank == 0:
-        with open(f'{args.model}.latency_model.attn_cache_len.json', 'w') as f:
-            json.dump(results, f)
+            for attn_cache_len in range(full_seqlen // SCAN_GRID[1], full_seqlen + 1, full_seqlen // SCAN_GRID[1]):
+                inputs.append((batch_size, seqlen, attn_cache_len))
 
-    results = []
-    for seqlen in tqdm.tqdm(range(STEP_GAP, full_seqlen + 1, STEP_GAP)):
-         r = runner.run(seqlen, 0, args.n_steps, args.warmup_steps)
-         results.append(r)
-    if args.rank == 0:
-        with open(f'{args.model}.latency_model.seqlen.json', 'w') as f:
-            json.dump(results, f)
+    # generate no context length data points
+    for batch_size in range(1, full_batch_size + 1):
+        for seqlen in range(STEP_GAP, full_seqlen + 1, STEP_GAP):
+            inputs.append((batch_size, seqlen, 0))
 
+    # filter out existing results
+    inputs = [x for x in inputs if x not in results]
+    # sort with heuristics, so we only get OOMs at the end
+    sort_functions = [
+        lambda x: x[0] * x[1] * (x[1] + x[2]),
+        lambda x: x[0] * x[1] * x[1],
+        lambda x: x[0] * x[1] * x[2],
+    ]
+    inputs.sort(key=sort_functions[args.sort_function])
+
+    for x in tqdm.tqdm(inputs):
+        try:
+            batch_size, seqlen, attn_cache_len = x
+            results[x] = runner.run(batch_size, seqlen, attn_cache_len, args.n_steps, args.warmup_steps)
+        except RuntimeError as e:
+            batch_size, seqlen, attn_cache_len = x
+            print(f"OOMed with batch_size={batch_size}, seqlen={seqlen}, attn_cache_len={attn_cache_len}.")
+            if args.rank == 0:
+                with open(filename, 'w') as f:
+                    json.dump(format_json(results), f, indent=4)
+            raise e
+
+    if args.rank == 0:
+        with open(filename, 'w') as f:
+            json.dump(format_json(results), f, indent=4)
 
 if __name__ == "__main__":
     main()
