@@ -29,7 +29,7 @@ def main():
     model_name = args.model_name
     with open('dp_results.json', 'r') as f:
         data = json.load(f)
-    data = [x for x in data if x['model_name'] != model_name]
+    data = [x for x in data if x['model_name'] == model_name]
     should_initialize_dist_group = True
     experiment = data[args.index]
 
