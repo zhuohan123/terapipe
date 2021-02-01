@@ -1,6 +1,7 @@
 import json
 import time
 import numba
+import tqdm
 
 import numpy as np
 from sklearn.linear_model import LinearRegression
@@ -159,21 +160,18 @@ def evaluate_split(latency_model, split_scheme, pipelinelen, layers_per_node):
     return total_time + (pipelinelen - 1) * largest_time + latency_model.update_time * layers_per_node
 
 
-if __name__ == "__main__":
-    # analysis_model('gpt3-175b')
-    total_batch_size = 2
-    seqlen = 2048
-    pipelinelen = 48
-    n_layers = MODEL_CONFIGS['gpt3-175b'][0]
+def analysis_model(model_name, total_batch_size, model_parallel_size, pipelinelen):
+    seqlen = MODEL_CONFIGS[model_name][2]
+    n_layers = MODEL_CONFIGS[model_name][0]
     layers_per_node = n_layers // pipelinelen
 
-    latency_model = fit_single_layer_model('gpt3-175b', 8, layers_per_node)
+    latency_model = fit_single_layer_model(model_name, model_parallel_size, layers_per_node)
     time_grid = latency_model.latency_grid
 
     all_possible_latencies = np.sort(np.unique(time_grid))
     best_latency = np.inf
     best_scheme = None
-    for max_latency in all_possible_latencies:
+    for max_latency in tqdm.tqdm(all_possible_latencies):
         if max_latency * pipelinelen > best_latency:
             break
         latency, all_split_scheme = planning(time_grid, total_batch_size, seqlen, pipelinelen, max_latency)
@@ -185,3 +183,7 @@ if __name__ == "__main__":
             best_scheme = all_split_scheme
             print(best_latency, best_scheme, len(best_scheme),
                   evaluate_split(latency_model, best_scheme, pipelinelen, layers_per_node))
+
+
+if __name__ == "__main__":
+    analysis_model('gpt3-13b', total_batch_size=32, model_parallel_size=8, pipelinelen=40)
