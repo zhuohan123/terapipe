@@ -16,6 +16,8 @@ ${ROOT_DIR}/scripts/fornode "pgrep -fl python | awk '!/batch_test\.py/{print $1}
 echo ALL_IPADDR ${ALL_IPADDR[@]}
 all_hosts=$(echo ${ALL_IPADDR[@]:0:$N_NODES} | sed 's/ /,/g')
 
+for p in $(ps aux | grep python | grep 7777 | grep model | grep -v grep | awk '{print $2}'); do kill -9 $p; done
+
 # '--oversubscribe' enables MPI to run muliple processes per node.
 /home/ubuntu/anaconda3/bin/mpirun --mca btl_tcp_if_exclude lo,docker0 --mca oob_tcp_if_exclude lo,docker0 \
     --map-by ppr:$N_GPUS:node --oversubscribe -H $all_hosts \
