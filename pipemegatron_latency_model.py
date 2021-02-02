@@ -11,6 +11,7 @@ import tqdm
 from test_transformer_pipemegatron import NCCLTransformer
 from transformer_models import TransformerConfig, MODEL_CONFIGS, BATCH_CONFIGS
 from latency_model import SCAN_GRID, STEP_GAP
+from utils import uniform_slice
 
 
 class TerapipeLatencyModel(NCCLTransformer):
@@ -144,8 +145,10 @@ def main():
 
     data_parallel_size = 1
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
+    batch_slices = uniform_slice(args.n_batch_slices)
+    input_slices = uniform_slice(args.n_input_slices)
     runner = TerapipeLatencyModel(
-        config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
+        config, batch_slices, input_slices, distributed_init_method, args.world_size,
         data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi, init_process_group=True,
