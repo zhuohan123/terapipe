@@ -194,6 +194,10 @@ class NCCLTransformer:
                     else:
                         w.grad += grad_w
 
+    def _create_slices(self, x, requires_grad):
+        # This function will be overrided by other classes. Do not delete it.
+        return grid_slice_batch_and_sequence(x, self.batch_slices, self.seq_slices, requires_grad=requires_grad)
+
     def create_inputs(self):
         if self.rank != 0:
             input_x = self.config.create_inputs_empty()
@@ -202,7 +206,7 @@ class NCCLTransformer:
 
         if self.mixed_precision:
             input_x = input_x.half()
-        return grid_slice_batch_and_sequence(input_x, self.batch_slices, self.seq_slices, requires_grad=True)
+        return self._create_slices(input_x, requires_grad=True)
 
     def prepare_grad_x(self, all_outputs):
         if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
@@ -221,7 +225,7 @@ class NCCLTransformer:
             grad_x = self.config.create_inputs_empty()
             if self.mixed_precision:
                 grad_x = grad_x.half()
-            sliced_grad_x = grid_slice_batch_and_sequence(grad_x, self.batch_slices, self.seq_slices)
+            sliced_grad_x = self._create_slices(grad_x, requires_grad=False)
             del grad_x
         return sliced_grad_x
 
