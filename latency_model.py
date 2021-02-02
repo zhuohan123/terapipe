@@ -192,35 +192,59 @@ def analysis_model(model_name, total_batch_size, model_parallel_size, pipelinele
                   evaluate_split(latency_model, best_scheme, pipelinelen, layers_per_node))
     return best_scheme, best_latency
 
-
+# model_name, batch_size, model_parallel_size, pipelinelen, data_parallel_size, n_nodes, gpus_per_node
 inputs = [
-    ('gpt3-1b', 8,  1, 24),
-    ('gpt3-1b', 16, 1, 24),
-    ('gpt3-1b', 36, 8, 12),
-    ('gpt3-1b', 48, 8, 24),
-    ('gpt3-1b', 48, 8, 12),
-    ('gpt3-1b', 72, 8, 24),
+    ('gpt3-1b', 8,  1, 24, 8, 24, 8),
+    ('gpt3-1b', 16, 1, 24, 8, 24, 8),
+    ('gpt3-1b', 36, 8, 12, 2, 24, 8),
+    ('gpt3-1b', 48, 8, 24, 1, 24, 8),
+    ('gpt3-1b', 48, 8, 12, 2, 24, 8),
+    ('gpt3-1b', 72, 8, 24, 1, 24, 8),
 
-    ('gpt3-13b',2,  1, 40),
-    ('gpt3-13b',4,  1, 40),
-    ('gpt3-13b',7,  1, 40),
-    ('gpt3-13b',12, 8, 20),
-    ('gpt3-13b',16, 8, 20),
-    ('gpt3-13b',20, 8, 40),
-    ('gpt3-13b',20, 8, 20),
-    ('gpt3-13b',32, 8, 40),
+    ('gpt3-13b', 2,  1, 40, 8, 40, 8),
+    ('gpt3-13b', 4,  1, 40, 8, 40, 8),
+    ('gpt3-13b', 7,  1, 40, 8, 40, 8),
+    ('gpt3-13b', 12, 8, 20, 2, 40, 8),
+    ('gpt3-13b', 16, 8, 20, 2, 40, 8),
+    ('gpt3-13b', 20, 8, 40, 1, 40, 8),
+    ('gpt3-13b', 20, 8, 20, 2, 40, 8),
+    ('gpt3-13b', 32, 8, 40, 1, 40, 8),
 
-    ('gpt3-44b', 8, 8, 48),
-    ('gpt3-44b', 4, 8, 24),
-    ('gpt3-44b', 2, 1, 96),
+    ('gpt3-44b', 8, 8, 48, 1, 48, 8),
+    ('gpt3-44b', 4, 8, 24, 2, 48, 8),
+    ('gpt3-44b', 2, 1, 96, 4, 48, 8),
 
-    ('gpt3-175b', 2, 8, 48),
-    ('gpt3-175b', 2, 4, 96),
+    ('gpt3-175b', 2, 8, 48, 1, 48, 8),
+    ('gpt3-175b', 2, 4, 96, 1, 48, 8),
 ]
 
 
 if __name__ == "__main__":
+    results = []
     for x in inputs:
         print("\n" + "=" * 30)
-        print(f"model_name={x[0]}, total_batch_size={x[1]}, model_parallel_size={x[2]}, pipelinelen={x[3]}")
-        analysis_model(*x)
+        print(f"model_name={x[0]}, total_batch_size={x[1]}, model_parallel_size={x[2]}, pipelinelen={x[3]}, "
+              f"data_parallel_size={x[4]}.")
+        results.append(analysis_model(*x[:4]))
+    dp_results = []
+    for x, (slices, latency) in zip(inputs, results):
+        batch_slices = []
+        input_slices = set()
+        for batch, seq_slices in slices:
+            batch_slices.append(batch)
+            input_slices.add(tuple(seq_slices))
+        assert len(input_slices) == 1
+        dp_results.append({
+            'model_name': x[0],
+            'batch_size': x[1],
+            'model_parallel_size': x[2],
+            'pipeline_length': x[3],
+            'data_parallel_size': x[4],
+            'n_nodes': x[5],
+            'gpus_per_node': x[6],
+            'latency': latency,
+            'batch_slices': batch_slices,
+            'input_slices': list(list(input_slices)[0]),
+        })
+    with open('dp_results.json', 'w') as f:
+        json.dump(dp_results, f, indent=4)
