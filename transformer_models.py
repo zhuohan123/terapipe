@@ -44,6 +44,10 @@ MODEL_CONFIGS = {
     "gpt3-13b":    (40,  5120, 2048,  5120 // 128),
     "gpt3-44b":   (96,  6144, 2048,  6144 // 128),
     "gpt3-175b":   (96, 12288, 2048, 12288 // 128),
+    # model with longer seqlen
+    "gpt3-13b-4096":    (40,  5120, 4096,  5120 // 128),
+    "gpt3-13b-6144":    (40,  5120, 6144,  5120 // 128),
+    "gpt3-13b-8192":    (40,  5120, 8192,  5120 // 128),
     # This is the model that Megatron-LM can run on
     # 48*8 NVIDIA-V100(16 GB) GPUs without OOM.
     "gpt3-175b-megatron":   (48, 12288//2, 2048, 384),
@@ -65,6 +69,9 @@ BATCH_CONFIGS = {
     "gpt3-13b": 32,
     "gpt3-44b": 16,
     "gpt3-175b": 2,
+    "gpt3-13b-4096": 8,
+    "gpt3-13b-6144": 4,
+    "gpt3-13b-8192": 2,
 }
 
 class TransformerConfig:

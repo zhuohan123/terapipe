@@ -14,3 +14,7 @@ done
 for i in 0 1; do
 ./mpirun_dp_slices_evaluation.sh 48 8 gpt3-175b $i
 done
+
+./mpirun_dp_slices_evaluation.sh 40 8 gpt3-13b-4096 0
+./mpirun_dp_slices_evaluation.sh 40 8 gpt3-13b-6144 0
+./mpirun_dp_slices_evaluation.sh 40 8 gpt3-13b-8192 0
