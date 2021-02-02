@@ -46,7 +46,7 @@ Edit `auto_latency_benchmark.sh` and add your model for computation latency eval
 Run `./auto_latency_benchmark.sh` over 1 p3.16xlarge machine.
 Outputs in `performance_model_data`.
 
-Edit `p2p_comm_latency.py.py` and add your model for computation latency evaluation.
+Edit `p2p_comm_latency.py.py` and add your model for communication latency evaluation.
 Run `./p2p_comm_latency.sh` over 2 p3.16xlarge machines.
 Outputs in `performance_model_data`.
 
