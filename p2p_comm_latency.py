@@ -73,7 +73,7 @@ def benchmark_p2p_communication(mpi_comm, rank, model_name, size_gap=32):
             "mean": durations_mean,
             "std": durations_std,
         }
-        with open(f"{model_name}.communication_latency.json", "w") as f:
+        with open(f"performance_model_data/{model_name}.communication_latency.json", "w") as f:
             json.dump(results, f)
     mpi_comm.Barrier()
 
