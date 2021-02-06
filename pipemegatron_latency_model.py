@@ -11,6 +11,7 @@ import tqdm
 from test_transformer_pipemegatron import NCCLTransformer
 from transformer_models import TransformerConfig, MODEL_CONFIGS, BATCH_CONFIGS
 from latency_model import SCAN_GRID, STEP_GAP
+from utils import uniform_slice
 
 
 class TerapipeLatencyModel(NCCLTransformer):
@@ -50,12 +51,20 @@ class TerapipeLatencyModel(NCCLTransformer):
         update_time = time.time() - start
 
         return py_forward_time, forward_time, py_backward_time, backward_time, update_time
+    
+    def _create_slices(self, x, requires_grad):
+        # This function will be overrided by other classes. Do not delete it.
+        inputs = np.empty((1, 1), dtype='O')
+        inputs[0, 0] = x.requires_grad_(requires_grad)
+        return inputs
 
     def run(self, batch_size, seqlen, attn_cache_len, n_steps, warmup_steps):
         gc.collect()
-        # overwrite the original seqlen
-        self.config.seq_len = seqlen
+        # overwrite the original slices
         self.config.batch_size = batch_size
+        self.config.seq_len = seqlen
+        self.batch_slices = [batch_size]
+        self.input_slices = [seqlen]
 
         py_forward_durations = []
         forward_durations = []
@@ -144,14 +153,18 @@ def main():
 
     data_parallel_size = 1
     distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
+    full_seqlen = config.seq_len
+    full_batch_size = args.batch_size
+
+    # these slices are just placeholders to comfort the model
+    batch_slices = uniform_slice(full_batch_size, args.n_batch_slices)
+    input_slices = uniform_slice(full_seqlen, args.n_input_slices)
     runner = TerapipeLatencyModel(
-        config, args.n_batch_slices, args.n_input_slices, distributed_init_method, args.world_size,
+        config, batch_slices, input_slices, distributed_init_method, args.world_size,
         data_parallel_size, args.model_parallel_size, args.pipeline_parallel_size,
         args.rank, args.local_rank, mixed_precision=args.mixed_precision,
         use_mpi=args.use_mpi, init_process_group=True,
     )
-    full_seqlen = config.seq_len
-    full_batch_size = args.batch_size
 
     inputs = []
     filename = f'performance_model_data/latency_model.{args.model}.mp_{args.model_parallel_size}.json'

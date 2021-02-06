@@ -38,25 +38,25 @@ EXTRA_ARGS="--mixed-precision"
 ./mpirun_pipemegatron.sh $N_NODES $N_GPUS $MODEL_PARALLEL_SIZE $PIPELINE_PARALLEL_SIZE $MODEL $N_SLICES $N_STEPS $EXTRA_ARGS
 ```
 
-# Latency Model
+## Latency Model
 
-## Single Layer
+### Data collection
 
-First, run the following script to collect data:
+Edit `auto_latency_benchmark.sh` and add your model for computation latency evaluation.
+Run `./auto_latency_benchmark.sh` over 1 p3.16xlarge machine.
+Outputs in `performance_model_data`.
 
-```bash
-./pipemegatron_latency_model.sh 8 gpt3-175b 10 --mixed-precision
-```
+Edit `p2p_comm_latency.py.py` and add your model for communication latency evaluation.
+Run `./p2p_comm_latency.sh` over 2 p3.16xlarge machines.
+Outputs in `performance_model_data`.
 
-This will create `{model_name}.latency_model.*.json` files under your current directory.
+### Fit latency model and generate optimal slices with DP.
 
-Then use `fit_single_layer_model(model_name)` in `latency_model.py` to get the prediction. For example,
+Edit and run `latency_model.py` to generate the optimal slices with DP. Results are saved in `dp_results.json`.
 
-```python
-import latency_model
-single_layer_latency_model = fit_single_layer_model('gpt3-175b')
-predict_latency = single_layer_latency_model(128, 32)
-```
+### Evaluate the optimal slices.
+
+Edit and run `auto_mpirun_dp_slices_evaluation.sh`. Results under `dp_evaluation_results`.
 
 ## Useful scripts:
 

@@ -73,7 +73,7 @@ def benchmark_p2p_communication(mpi_comm, rank, model_name, size_gap=32):
             "mean": durations_mean,
             "std": durations_std,
         }
-        with open(f"{model_name}.communication_latency.json", "w") as f:
+        with open(f"performance_model_data/{model_name}.communication_latency.json", "w") as f:
             json.dump(results, f)
     mpi_comm.Barrier()
 
@@ -107,3 +107,6 @@ if __name__ == "__main__":
     benchmark_p2p_communication(comm, rank, "gpt3-13b")
     benchmark_p2p_communication(comm, rank, "gpt3-44b")
     benchmark_p2p_communication(comm, rank, "gpt3-175b")
+    benchmark_p2p_communication(comm, rank, "gpt3-13b-4096")
+    benchmark_p2p_communication(comm, rank, "gpt3-13b-6144")
+    benchmark_p2p_communication(comm, rank, "gpt3-13b-8192")
