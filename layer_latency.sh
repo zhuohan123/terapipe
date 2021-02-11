@@ -12,7 +12,7 @@ N_STEPS=$4
 EXTRA_ARGS=$5
 
 PYTHON_EXEC=$(which python)
-PYTHON_SCRIPT=$(realpath -s terapipe_latency_model.py)
+PYTHON_SCRIPT=$(realpath -s layer_latency.py)
 ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/scripts/load_cluster_env.sh
 

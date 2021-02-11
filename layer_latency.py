@@ -10,7 +10,7 @@ import tqdm
 
 from test_transformer_terapipe import NCCLTransformer
 from transformer_models import TransformerConfig, MODEL_CONFIGS, BATCH_CONFIGS
-from latency_model import SCAN_GRID, STEP_GAP
+from dynamic_programming import SCAN_GRID, STEP_GAP
 from utils import uniform_slice
 
 
