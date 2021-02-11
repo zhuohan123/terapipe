@@ -17,7 +17,7 @@ def run_experiment(n_nodes, n_gpus_per_node, model_parallel_size, pipeline_paral
                 model, batch_size, n_batch_slices, n_input_slices, n_steps, mixed_precision,
                 checkpoint_gradients):
     run_cmd = [
-        "/home/ubuntu/model-parallel-speed-test/mpirun_pipemegatron.sh",
+        "/home/ubuntu/model-parallel-speed-test/mpirun_terapipe.sh",
         str(n_nodes),
         str(n_gpus_per_node),
         str(model_parallel_size),

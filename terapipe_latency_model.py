@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import tqdm
 
-from test_transformer_pipemegatron import NCCLTransformer
+from test_transformer_terapipe import NCCLTransformer
 from transformer_models import TransformerConfig, MODEL_CONFIGS, BATCH_CONFIGS
 from latency_model import SCAN_GRID, STEP_GAP
 from utils import uniform_slice
