@@ -13,7 +13,7 @@ N_STEPS=$7
 EXTRA_ARGS=$8
 
 PYTHON_EXEC=$(which python)
-PYTHON_SCRIPT=$(realpath -s test_transformer_pipemegatron.py)
+PYTHON_SCRIPT=$(realpath -s test_transformer_terapipe.py)
 ROOT_DIR=$(dirname $(realpath -s ${0}))
 source ${ROOT_DIR}/scripts/load_cluster_env.sh
 

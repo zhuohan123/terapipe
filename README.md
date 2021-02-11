@@ -35,7 +35,7 @@ MODEL=test # Name of the model to test (see MODEL_CONFIGS)
 N_SLICES=8 # Number of input shards (currently we uniformly slice the input)
 N_STEPS=10 # Number of testing steps to run
 EXTRA_ARGS="--mixed-precision"
-./mpirun_pipemegatron.sh $N_NODES $N_GPUS $MODEL_PARALLEL_SIZE $PIPELINE_PARALLEL_SIZE $MODEL $N_SLICES $N_STEPS $EXTRA_ARGS
+./mpirun_terapipe.sh $N_NODES $N_GPUS $MODEL_PARALLEL_SIZE $PIPELINE_PARALLEL_SIZE $MODEL $N_SLICES $N_STEPS $EXTRA_ARGS
 ```
 
 ## Latency Model

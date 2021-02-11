@@ -12,8 +12,6 @@ from cython.operator cimport dereference, postincrement
 
 import torch
 
-# TODO(Siyuan): python error handling for NCCL
-
 cdef cudaStream_t _get_native_cuda_stream(stream=None, tensor=None):
     if stream is None:
         if tensor is None:

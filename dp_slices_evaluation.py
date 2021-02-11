@@ -5,7 +5,7 @@ import os
 import time
 
 from transformer_models import TransformerConfig, MODEL_CONFIGS
-from test_transformer_pipemegatron import NCCLTransformerRunner
+from test_transformer_terapipe import NCCLTransformerRunner
 from memory_model import peak_memory_per_gpu
 
 
