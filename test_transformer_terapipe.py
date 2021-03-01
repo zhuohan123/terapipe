@@ -30,7 +30,7 @@ LOSS_SCALE_FACTOR = 128.0
 class NCCLTransformer:
     def __init__(self, config, batch_slices, seq_slices, distributed_init_method, world_size, data_parallel_size,
                  model_parallel_size, pipeline_parallel_size, rank, local_rank, mixed_precision=False, use_mpi=False,
-                 init_process_group=False, checkpoint_gradients=False, send_via_broadcast=True):
+                 init_process_group=False, checkpoint_gradients=False):
         self.config = config
         self.batch_slices = batch_slices
         self.seq_slices = seq_slices
@@ -46,11 +46,6 @@ class NCCLTransformer:
         mpu.initialize_model_parallel(model_parallel_size, pipeline_parallel_size)
         set_random_seed(0)
         mpu.model_parallel_cuda_manual_seed(0)
-        self.send_via_broadcast = send_via_broadcast
-        if self.send_via_broadcast:
-            self.comm = None
-        else:
-            self.comm = nccl.get_nccl_communicator(local_rank, rank, world_size, use_mpi)
         self.rank = rank
         self.local_rank = local_rank
         self.world_size = world_size
@@ -124,11 +119,8 @@ class NCCLTransformer:
                 x = all_inputs[batch_id, input_id]
                 slice_seq_len = x.size(0)
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                    if self.send_via_broadcast:
-                        assert self.pipeline_parallel_succ_group is not None
-                        dist.broadcast(x, self.model_parallel_prev_dst_rank, group=self.pipeline_parallel_succ_group)
-                    else:
-                        self.comm.recv_tensor(x, self.model_parallel_prev_dst_rank)
+                    assert self.pipeline_parallel_succ_group is not None
+                    dist.broadcast(x, self.model_parallel_prev_dst_rank, group=self.pipeline_parallel_succ_group)
                 if self.model_parallel_size > 1:
                     dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
                 for layer_id in range(self.n_layers):
@@ -141,11 +133,8 @@ class NCCLTransformer:
                 cache_len += slice_seq_len
                 if (self.rank == self.model_parallel_dst_rank
                         and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
-                    if self.send_via_broadcast:
-                        assert self.pipeline_parallel_pred_group is not None
-                        dist.broadcast(x, self.model_parallel_dst_rank, group=self.pipeline_parallel_pred_group)
-                    else:
-                        self.comm.send_tensor(x, self.model_parallel_next_src_rank)
+                    assert self.pipeline_parallel_pred_group is not None
+                    dist.broadcast(x, self.model_parallel_dst_rank, group=self.pipeline_parallel_pred_group)
         return all_outputs, all_cache_inputs, all_cache_outputs
 
     def backward_step(self, sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs):
@@ -157,11 +146,8 @@ class NCCLTransformer:
                 dy = sliced_grad_x[batch_id, input_id]
                 if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
                     if self.rank == self.model_parallel_dst_rank:
-                        if self.send_via_broadcast:
-                            assert self.pipeline_parallel_pred_group is not None
-                            dist.broadcast(dy, self.model_parallel_next_src_rank, group=self.pipeline_parallel_pred_group)
-                        else:
-                            self.comm.recv_tensor(dy, self.model_parallel_next_src_rank)
+                        assert self.pipeline_parallel_pred_group is not None
+                        dist.broadcast(dy, self.model_parallel_next_src_rank, group=self.pipeline_parallel_pred_group)
                     if self.model_parallel_size > 1:
                         dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
                 x = all_inputs[batch_id, input_id]
@@ -180,11 +166,8 @@ class NCCLTransformer:
                 dw, dx, dcache = all_grads[:self.n_params], all_grads[self.n_params], all_grads[self.n_params + 1:]
                 cache_len -= slice_seq_len
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                    if self.send_via_broadcast:
-                        assert self.pipeline_parallel_succ_group is not None
-                        dist.broadcast(dx, self.model_parallel_src_rank, group=self.pipeline_parallel_succ_group)
-                    else:
-                        self.comm.send_tensor(dx, self.model_parallel_prev_dst_rank)
+                    assert self.pipeline_parallel_succ_group is not None
+                    dist.broadcast(dx, self.model_parallel_src_rank, group=self.pipeline_parallel_succ_group)
                 if cache_len > 0:
                     for grad, update in zip(chain.from_iterable(all_full_cache_grad), dcache):
                         grad[:, :cache_len, :] += update[:, :cache_len, :]
