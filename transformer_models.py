@@ -342,43 +342,6 @@ class SingleDeviceTransformer(nn.Module):
         return x, new_attn_caches
 
 
-class PipelinedTransformer(nn.Module):
-    def __init__(self, nested_transformer_layers, config):
-        super().__init__()
-        self.config = config
-        assert len(nested_transformer_layers) == config.n_devices
-        self.single_device_transformers = nn.ModuleList([
-            SingleDeviceTransformer(transformer_layers) for transformer_layers in nested_transformer_layers
-        ])
-
-    def forward(self, segmented_xs):
-        n_segments = len(segmented_xs)
-
-        def _worker(device_id, model, my_queue, succ_queue):
-            with torch.cuda.device(device_id):
-                cache = None
-                for t in range(n_segments):
-                    x = my_queue.get().to(device_id, non_blocking=True)
-                    x, cache = model(x, cache)
-                    succ_queue.put(x)
-
-        all_queues = [queue.Queue() for _ in range(self.config.n_devices + 1)]
-        threads = [threading.Thread(target=_worker,
-                                    args=(self.config.placement_orders[i], self.single_device_transformers[i],
-                                          all_queues[i], all_queues[i + 1]))
-                   for i in range(self.config.n_devices)]
-        for x in segmented_xs:
-            all_queues[0].put(x)
-        for thread in threads:
-            thread.start()
-        results = []
-        for _ in range(n_segments):
-            results.append(all_queues[-1].get())
-        for thread in threads:
-            thread.join()
-        return results
-
-
 def save_layers_and_inputs(layers, grad_layers, layer_ids, inputs, prefix):
     for i, layer, grad in zip(layer_ids, layers, grad_layers):
         torch.save(layer.state_dict(), ".".join([prefix, str(i)]))
