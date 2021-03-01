@@ -16,7 +16,6 @@ from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 import sys
 
 import mpu
-import nccl
 from utils import set_random_seed, timeout, TimeoutError, uniform_slice
 from transformer_models import (
     TransformerConfig, MODEL_CONFIGS, grid_slice_batch_and_sequence,
