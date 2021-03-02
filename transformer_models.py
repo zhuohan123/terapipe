@@ -8,12 +8,6 @@ import queue
 import mpu
 
 import checkpoint
-class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
-    def detach(self):
-        return AttentionCache(
-            k=self.k.detach().requires_grad_(),
-            v=self.v.detach().requires_grad_(),
-        )
 
 
 # https://github.com/NVIDIA/apex/issues/93
@@ -252,13 +246,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
         else:
             attn = attn_helper(q, k, v)
         attn = self.out_proj(attn)
-        return attn, AttentionCache(new_k, new_v)
+        return attn, (new_k, new_v)
 
     def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
         # self.batch_size * self.num_attention_heads, length, self.attention_heads_dim
         k = torch.zeros(batch_size * self.num_heads, seq_len, self.head_dim, device=device, dtype=dtype)
         v = torch.zeros(batch_size * self.num_heads, seq_len, self.head_dim, device=device, dtype=dtype)
-        return AttentionCache(k, v)
+        return k, v
 
 
 class TransformerLayer(nn.Module):
