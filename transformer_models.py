@@ -200,8 +200,6 @@ class MultiheadLMAttentionWithCache(nn.Module):
         self.in_proj = nn.Linear(embed_dim, embed_dim * 3, bias=bias).to(device)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias).to(device)
 
-        # TODO: initialize the weights correctly
-
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         assert (
