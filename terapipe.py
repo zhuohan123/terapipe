@@ -150,7 +150,7 @@ class TeraPipe:
         return outputs, cache_inputs, cache_outputs
 
     def forward(self, x=None):
-
+        pass
 
     def backward_step(self, sliced_grad_x, inputs, outputs, cache_inputs, cache_outputs):
         for batch_id in reversed(range(self.n_batch_slices)):
