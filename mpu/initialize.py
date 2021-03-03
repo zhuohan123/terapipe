@@ -155,6 +155,12 @@ def get_data_parallel_rank():
     return _DATA_PARALLEL_GROUP_RANK
 
 
+def get_pipeline_parallel_world_size():
+    """Return world size for the data parallel group."""
+    assert _INITIALIZED
+    return _PIPELINE_PARALLEL_SIZE
+
+
 def get_pipeline_parallel_pred_group():
     """Get the pipeline parallel group in which the caller is the predecessor
        (the sender in the forward pass)"""
