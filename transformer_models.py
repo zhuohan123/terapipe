@@ -8,12 +8,6 @@ import queue
 import mpu
 
 import checkpoint
-class AttentionCache(namedtuple('attention_cache', ['k', 'v'])):
-    def detach(self):
-        return AttentionCache(
-            k=self.k.detach().requires_grad_(),
-            v=self.v.detach().requires_grad_(),
-        )
 
 
 # https://github.com/NVIDIA/apex/issues/93
@@ -252,13 +246,13 @@ class MultiheadLMAttentionWithCache(nn.Module):
         else:
             attn = attn_helper(q, k, v)
         attn = self.out_proj(attn)
-        return attn, AttentionCache(new_k, new_v)
+        return attn, (new_k, new_v)
 
     def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
         # self.batch_size * self.num_attention_heads, length, self.attention_heads_dim
         k = torch.zeros(batch_size * self.num_heads, seq_len, self.head_dim, device=device, dtype=dtype)
         v = torch.zeros(batch_size * self.num_heads, seq_len, self.head_dim, device=device, dtype=dtype)
-        return AttentionCache(k, v)
+        return k, v
 
 
 class TransformerLayer(nn.Module):
@@ -340,43 +334,6 @@ class SingleDeviceTransformer(nn.Module):
             x, new_attn_cache = layer(x, attn_cache)
             new_attn_caches.append(new_attn_cache)
         return x, new_attn_caches
-
-
-class PipelinedTransformer(nn.Module):
-    def __init__(self, nested_transformer_layers, config):
-        super().__init__()
-        self.config = config
-        assert len(nested_transformer_layers) == config.n_devices
-        self.single_device_transformers = nn.ModuleList([
-            SingleDeviceTransformer(transformer_layers) for transformer_layers in nested_transformer_layers
-        ])
-
-    def forward(self, segmented_xs):
-        n_segments = len(segmented_xs)
-
-        def _worker(device_id, model, my_queue, succ_queue):
-            with torch.cuda.device(device_id):
-                cache = None
-                for t in range(n_segments):
-                    x = my_queue.get().to(device_id, non_blocking=True)
-                    x, cache = model(x, cache)
-                    succ_queue.put(x)
-
-        all_queues = [queue.Queue() for _ in range(self.config.n_devices + 1)]
-        threads = [threading.Thread(target=_worker,
-                                    args=(self.config.placement_orders[i], self.single_device_transformers[i],
-                                          all_queues[i], all_queues[i + 1]))
-                   for i in range(self.config.n_devices)]
-        for x in segmented_xs:
-            all_queues[0].put(x)
-        for thread in threads:
-            thread.start()
-        results = []
-        for _ in range(n_segments):
-            results.append(all_queues[-1].get())
-        for thread in threads:
-            thread.join()
-        return results
 
 
 def save_layers_and_inputs(layers, grad_layers, layer_ids, inputs, prefix):

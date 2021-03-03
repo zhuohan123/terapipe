@@ -1,3 +1,0 @@
-_nccl.cpp
-*.so
-test/round_trip_test
