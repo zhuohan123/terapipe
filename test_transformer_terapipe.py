@@ -123,7 +123,8 @@ class NCCLTransformer:
                 if self.model_parallel_size > 1:
                     dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
                 for layer_id in range(self.n_layers):
-                    cache_input = all_full_cache[layer_id].detach()
+                    k, v = all_full_cache[layer_id]
+                    cache_input = k.detach().requires_grad_(), v.detach().requires_grad_()
                     all_full_cache[layer_id] = cache_input
                     all_cache_inputs[batch_id, input_id, layer_id] = cache_input
                     x, cache_output = self.layers[layer_id](x, cache_input, cache_len)
@@ -139,7 +140,7 @@ class NCCLTransformer:
     def backward_step(self, sliced_grad_x, all_inputs, all_outputs, all_cache_inputs, all_cache_outputs):
         for batch_id in reversed(range(self.n_batch_slices)):
             slice_batch_size = all_inputs[batch_id, 0].size(1)
-            all_full_cache_grad = self.create_attention_cache(slice_batch_size)
+            dcache = list(chain.from_iterable(self.create_attention_cache(slice_batch_size)))
             cache_len = self.config.seq_len
             for input_id in reversed(range(self.n_input_slices)):
                 dy = sliced_grad_x[batch_id, input_id]
@@ -154,7 +155,7 @@ class NCCLTransformer:
                 slice_seq_len = x.size(0)
                 if input_id < self.n_input_slices - 1:
                     a = list(chain.from_iterable(all_cache_outputs[batch_id, input_id]))
-                    da = [x[:, cache_len - slice_seq_len:cache_len] for x in chain.from_iterable(all_full_cache_grad)]
+                    da = dcache
                 else:
                     a = []
                     da = []
@@ -167,9 +168,6 @@ class NCCLTransformer:
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     assert self.pipeline_parallel_succ_group is not None
                     dist.broadcast(dx, self.model_parallel_src_rank, group=self.pipeline_parallel_succ_group)
-                if cache_len > 0:
-                    for grad, update in zip(chain.from_iterable(all_full_cache_grad), dcache):
-                        grad[:, :cache_len, :] += update[:, :cache_len, :]
                 for grad_w, w in zip(dw, self.all_parameters):
                     if w.grad is None:
                         w.grad = grad_w.detach()
