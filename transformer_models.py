@@ -177,15 +177,17 @@ class TransformerConfig:
 class _AssignCache(torch.autograd.Function):
     # Adapted from https://discuss.pytorch.org/t/disable-in-place-correctness-version-check-any-other-workaround/90738/4
     @staticmethod
-    def forward(ctx, cache, value, start, end):
-        ctx.start = start
-        ctx.end = end
-        cache.data[:, start:end, :] = value
+    def forward(ctx, cache, value, index):
+        ctx.index = index
+        cache.data[index] = value
         return cache
 
     @staticmethod
-    def backward(ctx, grad_cache):
-        return grad_cache, grad_cache[:, ctx.start:ctx.end, :], None, None
+    def backward(ctx, grad_cache_output):
+        grad_value = grad_cache_output[ctx.index]
+        grad_cache = grad_cache_output.clone()
+        grad_cache.data[ctx.index] = 0
+        return grad_cache, grad_value, None, None
 
 
 assign_cache_ = _AssignCache.apply
@@ -219,8 +221,9 @@ class MultiheadLMAttentionWithCache(nn.Module):
         if full_cache is not None:
             src_len = cache_len + tgt_len
             cache_k, cache_v = full_cache
-            cache_k = assign_cache_(cache_k, new_k, cache_len, src_len)
-            cache_v = assign_cache_(cache_v, new_v, cache_len, src_len)
+            cache_slice_index = (slice(None), slice(cache_len, src_len), slice(None))
+            cache_k = assign_cache_(cache_k, new_k, cache_slice_index)
+            cache_v = assign_cache_(cache_v, new_v, cache_slice_index)
             k = cache_k[:, :src_len, :]
             v = cache_v[:, :src_len, :]
             attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
