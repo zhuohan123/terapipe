@@ -79,7 +79,7 @@ class TransformerLayers(nn.Module):
         return x, cache_outputs
 
     def create_inputs_empty(self, batch_size, seq_len, device='cuda'):
-        x = torch.empty((seq_len, batch_size, self.embedding_dim), device=device)
+        x = torch.empty((seq_len, batch_size, self.embedding_dim), device=device, dtype=torch.float16 if self.mixed_precision else torch.float32)
         return x
 
 
@@ -87,7 +87,8 @@ class TeraPipe:
     def __init__(self, layers, batch_size, seq_len, batch_slices, seq_slices):
         # Some assumptions about layers:
         #   forward maps from (x, cache, cache_len) to (x, new_cache, cache_outputs):
-        #   x and caches' shape are (batch, sequence, ...):
+        #   x's shape is (sequence, batch, ...)
+        #   caches' shape are (batch, sequence, ...)
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.batch_slices = batch_slices
@@ -149,16 +150,13 @@ class TeraPipe:
                     dist.broadcast(y, self.model_parallel_dst_rank, group=self.pipeline_parallel_pred_group)
         return outputs, cache_inputs, cache_outputs
 
-    def forward(self, x=None):
-        pass
-
-    def backward_step(self, sliced_grad_x, inputs, outputs, cache_inputs, cache_outputs):
+    def backward_step(self, grad_outputs, inputs, outputs, cache_inputs, cache_outputs):
         for batch_id in reversed(range(self.n_batch_slices)):
             slice_batch_size = inputs[batch_id, 0].size(1)
-            cache_grad = self.layers.create_cache(slice_batch_size, self.seq_len)
+            grad_cache = self.layers.create_cache(slice_batch_size, self.seq_len)
             cache_len = self.seq_len
             for input_id in reversed(range(self.n_input_slices)):
-                dy = sliced_grad_x[batch_id, input_id]
+                dy = grad_outputs[batch_id, input_id]
                 if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
                     if self.rank == self.model_parallel_dst_rank:
                         assert self.pipeline_parallel_pred_group is not None
@@ -170,29 +168,58 @@ class TeraPipe:
                 slice_seq_len = x.size(0)
                 if input_id < self.n_input_slices - 1:
                     a = cache_outputs[batch_id, input_id]
-                    da = [x[:, cache_len - slice_seq_len:cache_len] for x in cache_grad]
+                    da = [grad[:, cache_len - slice_seq_len:cache_len] for grad in grad_cache]
                 else:
                     a = []
                     da = []
-                outputs = [y] + a
-                grad_outputs = [dy] + da
+                graph_outputs = [y] + a
+                grad_graph_outputs = [dy] + da
                 parameters = list(self.layers.parameters())
                 n_params = len(parameters)
-                inputs = parameters + [x] + cache_inputs[batch_id, input_id]
-                grads = torch.autograd.grad(outputs, inputs, grad_outputs)
+                graph_inputs = parameters + [x] + cache_inputs[batch_id, input_id]
+                grads = torch.autograd.grad(graph_outputs, graph_inputs, grad_graph_outputs)
                 dw, dx, dcache = grads[:n_params], grads[n_params], grads[n_params + 1:]
                 cache_len -= slice_seq_len
                 if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
                     assert self.pipeline_parallel_succ_group is not None
                     dist.broadcast(dx, self.model_parallel_src_rank, group=self.pipeline_parallel_succ_group)
                 if cache_len > 0:
-                    for grad, update in zip(cache_grad, dcache):
+                    for grad, update in zip(grad_cache, dcache):
                         grad[:, :cache_len] += update[:, :cache_len]
                 for grad_w, w in zip(dw, parameters):
                     if w.grad is None:
                         w.grad = grad_w.detach()
                     else:
                         w.grad += grad_w
+
+    def forward(self, x=None):
+        if self.pipeline_parallel_group_rank == 0:
+            assert x is not None
+            assert x.size(0) == self.seq_len
+            assert x.size(1) == self.batch_size
+        else:
+            x = self.layers.create_inputs_empty(self.batch_size, self.seq_len)
+        inputs = self.create_slices(x, requires_grad=True)
+        del x
+        outputs, cache_inputs, cache_outputs = self.forward_step(inputs)
+        if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
+            y = torch.cat([torch.cat(s.tolist(), dim=0) for s in outputs], dim=1)
+        else:
+            y = None
+        return y, (inputs, outputs, cache_inputs, cache_outputs)
+
+    def backward(self, cache, loss=None):
+        inputs, outputs, cache_inputs, cache_outputs = cache
+        if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
+            assert loss is not None
+            grad_outputs = torch.autograd.grad(loss, outputs.ravel())
+            grad_outputs = np.array(grad_outputs, dtype='O').reshape(self.n_batch_slices, self.n_input_slices)
+        else:
+            unsliced_grad_outputs = self.layers.create_inputs_empty()
+            grad_outputs = self.create_slices(unsliced_grad_outputs, requires_grad=False)
+            del unsliced_grad_outputs
+        self.backward_step(grad_outputs, inputs, outputs, cache_inputs, cache_outputs)
+        # TODO: need to calculate grad to input x and weights
 
     def create_slices(self, x, requires_grad):
         # This function will be overrided by other classes. Do not delete it.
