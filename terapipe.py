@@ -83,6 +83,52 @@ class TransformerLayers(nn.Module):
         return x
 
 
+class PipelineSendOperator(torch.autograd.Function):
+    """Send activations to the next pipeline stage"""
+
+    @staticmethod
+    def forward(ctx, x):
+        rank = torch.distributed.get_rank()
+        dst_rank = mpu.get_model_parallel_dst_rank()
+        next_src_rank = mpu.get_model_parallel_next_src_rank()
+        pipeline_group = mpu.get_pipeline_parallel_pred_group()
+        if rank == dst_rank and next_src_rank is not None:
+            assert pipeline_group is not None
+            dist.broadcast(x, dst_rank, group=pipeline_group)
+        return ()
+
+    @staticmethod
+    def backward(ctx, *grad):
+        return tuple(grad)
+
+
+class PipelineRecvOperator(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        rank = torch.distributed.get_rank()
+        prev_dst_rank = mpu.get_model_parallel_prev_dst_rank()
+        src_rank = mpu.get_model_parallel_src_rank()
+        pipeline_group = mpu.get_pipeline_parallel_succ_group()
+        model_parallel_group = mpu.get_model_parallel_group()
+        if prev_dst_rank is not None:
+            if rank == src_rank:
+                assert pipeline_group is not None
+                dist.broadcast(x, prev_dst_rank, group=pipeline_group)
+            dist.broadcast(x, src_rank, group=model_parallel_group)
+        return x
+
+    @staticmethod
+    def backward(ctx, grad_x):
+        rank = torch.distributed.get_rank()
+        prev_dst_rank = mpu.get_model_parallel_prev_dst_rank()
+        src_rank = mpu.get_model_parallel_src_rank()
+        pipeline_group = mpu.get_pipeline_parallel_succ_group()
+        if prev_dst_rank is not None and rank == src_rank:
+            assert pipeline_group is not None
+            dist.broadcast(grad_x, src_rank, group=pipeline_group)
+        return (None, )
+
+
 class TeraPipe:
     def __init__(self, layers, batch_size, seq_len, batch_slices, seq_slices):
         # Some assumptions about layers:
