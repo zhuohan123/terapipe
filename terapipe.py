@@ -95,11 +95,21 @@ class PipelineSendOperator(torch.autograd.Function):
         if rank == dst_rank and next_src_rank is not None:
             assert pipeline_group is not None
             dist.broadcast(x, dst_rank, group=pipeline_group)
-        return ()
+        return x
 
     @staticmethod
-    def backward(ctx, *grad):
-        return tuple(grad)
+    def backward(ctx, grad_x):
+        rank = torch.distributed.get_rank()
+        dst_rank = mpu.get_model_parallel_dst_rank()
+        next_src_rank = mpu.get_model_parallel_next_src_rank()
+        pipeline_group = mpu.get_pipeline_parallel_pred_group()
+        model_parallel_group = mpu.get_model_parallel_group()
+        if next_src_rank is not None:
+            if rank == dst_rank:
+                assert pipeline_group is not None
+                dist.broadcast(grad_x, next_src_rank, group=pipeline_group)
+            dist.broadcast(grad_x, dst_rank, group=model_parallel_group)
+        return grad_x
 
 
 class PipelineRecvOperator(torch.autograd.Function):
@@ -126,7 +136,44 @@ class PipelineRecvOperator(torch.autograd.Function):
         if prev_dst_rank is not None and rank == src_rank:
             assert pipeline_group is not None
             dist.broadcast(grad_x, src_rank, group=pipeline_group)
-        return (None, )
+        return None
+
+
+pipeline_send = PipelineSendOperator.apply
+pipeline_recv = PipelineRecvOperator.apply
+
+
+def terapipe_backward(outputs, grad_outputs, cache_inputs, cache_outputs):
+    n_batch_slices, n_input_slices = outputs.size()
+    for batch_id in reversed(range(n_batch_slices)):
+        da = []
+        for input_id in reversed(n_input_slices):
+            y = outputs[batch_id, input_id]
+            dy = grad_outputs[batch_id, input_id]
+            if input_id < n_input_slices - 1:
+                a = cache_outputs[batch_id, input_id]
+            else:
+                a = []
+            torch.autograd.backward([y] + a, [dy] + da)
+            da = [t.grad for t in cache_inputs[batch_id, input_id]]
+
+
+class TeraPipeBackwardPassWithCat(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, outputs, cache_inputs, cache_outputs):
+        # FIXME: may need a phony input x here
+        ctx.outputs = outputs
+        ctx.cache_inputs = cache_inputs
+        ctx.cache_outputs = cache_outputs
+        y = torch.cat([torch.cat(s.tolist(), dim=0) for s in outputs], dim=1)
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_x):
+        del ctx.outputs
+        del ctx.cache_inputs
+        del ctx.cache_outputs
+        # TODO: finish backward here
 
 
 class TeraPipe:
@@ -139,23 +186,6 @@ class TeraPipe:
         self.seq_len = seq_len
         self.batch_slices = batch_slices
         self.seq_slices = seq_slices
-        self.rank = torch.distributed.get_rank()
-        self.world_size = torch.distributed.get_world_size()
-        self.model_parallel_size = mpu.get_model_parallel_world_size()
-        self.pipeline_parallel_size = mpu.get_pipeline_parallel_world_size()
-        self.pipeline_parallel_group_rank = mpu.get_pipeline_parallel_group_rank()
-        self.model_parallel_group = mpu.get_model_parallel_group()
-        self.pipeline_parallel_pred_group = mpu.get_pipeline_parallel_pred_group()
-        self.pipeline_parallel_succ_group = mpu.get_pipeline_parallel_succ_group()
-        self.model_parallel_src_rank = mpu.get_model_parallel_src_rank()
-        self.model_parallel_dst_rank = mpu.get_model_parallel_dst_rank()
-        self.model_parallel_next_src_rank = (
-            self.model_parallel_src_rank + self.model_parallel_size
-            if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1
-            else None)
-        self.model_parallel_prev_dst_rank = (
-            self.model_parallel_dst_rank - self.model_parallel_size
-            if self.pipeline_parallel_group_rank > 0 else None)
 
         self.layers = layers
 
@@ -167,7 +197,7 @@ class TeraPipe:
     def n_input_slices(self):
         return len(self.seq_slices)
 
-    def forward_step(self, inputs):
+    def forward(self, inputs):
         cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
         cache_outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
         outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
@@ -178,97 +208,14 @@ class TeraPipe:
             cache_len = 0
             for input_id in range(self.n_input_slices):
                 x = inputs[batch_id, input_id]
+                x = pipeline_recv(x)
                 slice_seq_len = x.size(0)
-                if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                    assert self.pipeline_parallel_succ_group is not None
-                    dist.broadcast(x, self.model_parallel_prev_dst_rank, group=self.pipeline_parallel_succ_group)
-                if self.model_parallel_size > 1:
-                    dist.broadcast(x, self.model_parallel_src_rank, group=self.model_parallel_group)
                 cache = [c.detach().requires_grad_() for c in cache]
                 y, cache_output = self.layers(x, cache, cache_len)
+                y = pipeline_send(y)
                 cache_inputs[batch_id, input_id] = cache
                 cache_outputs[batch_id, input_id] = cache_output
+                cache = cache_output
                 outputs[batch_id, input_id] = y
                 cache_len += slice_seq_len
-                if (self.rank == self.model_parallel_dst_rank
-                        and self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1):
-                    assert self.pipeline_parallel_pred_group is not None
-                    dist.broadcast(y, self.model_parallel_dst_rank, group=self.pipeline_parallel_pred_group)
-        return outputs, cache_inputs, cache_outputs
-
-    def backward_step(self, grad_outputs, inputs, outputs, cache_inputs, cache_outputs):
-        for batch_id in reversed(range(self.n_batch_slices)):
-            slice_batch_size = inputs[batch_id, 0].size(1)
-            grad_cache = self.layers.create_cache(slice_batch_size, self.seq_len)
-            cache_len = self.seq_len
-            for input_id in reversed(range(self.n_input_slices)):
-                dy = grad_outputs[batch_id, input_id]
-                if self.pipeline_parallel_group_rank < self.pipeline_parallel_size - 1:
-                    if self.rank == self.model_parallel_dst_rank:
-                        assert self.pipeline_parallel_pred_group is not None
-                        dist.broadcast(dy, self.model_parallel_next_src_rank, group=self.pipeline_parallel_pred_group)
-                    if self.model_parallel_size > 1:
-                        dist.broadcast(dy, self.model_parallel_dst_rank, group=self.model_parallel_group)
-                x = inputs[batch_id, input_id]
-                y = outputs[batch_id, input_id]
-                slice_seq_len = x.size(0)
-                if input_id < self.n_input_slices - 1:
-                    a = cache_outputs[batch_id, input_id]
-                    da = [grad[:, cache_len - slice_seq_len:cache_len] for grad in grad_cache]
-                else:
-                    a = []
-                    da = []
-                graph_outputs = [y] + a
-                grad_graph_outputs = [dy] + da
-                parameters = list(self.layers.parameters())
-                n_params = len(parameters)
-                graph_inputs = parameters + [x] + cache_inputs[batch_id, input_id]
-                grads = torch.autograd.grad(graph_outputs, graph_inputs, grad_graph_outputs)
-                dw, dx, dcache = grads[:n_params], grads[n_params], grads[n_params + 1:]
-                cache_len -= slice_seq_len
-                if self.rank == self.model_parallel_src_rank and self.pipeline_parallel_group_rank > 0:
-                    assert self.pipeline_parallel_succ_group is not None
-                    dist.broadcast(dx, self.model_parallel_src_rank, group=self.pipeline_parallel_succ_group)
-                if cache_len > 0:
-                    for grad, update in zip(grad_cache, dcache):
-                        grad[:, :cache_len] += update[:, :cache_len]
-                for grad_w, w in zip(dw, parameters):
-                    if w.grad is None:
-                        w.grad = grad_w.detach()
-                    else:
-                        w.grad += grad_w
-
-    def forward(self, x=None):
-        if self.pipeline_parallel_group_rank == 0:
-            assert x is not None
-            assert x.size(0) == self.seq_len
-            assert x.size(1) == self.batch_size
-        else:
-            x = self.layers.create_inputs_empty(self.batch_size, self.seq_len)
-        inputs = self.create_slices(x, requires_grad=True)
-        del x
-        outputs, cache_inputs, cache_outputs = self.forward_step(inputs)
-        if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
-            y = torch.cat([torch.cat(s.tolist(), dim=0) for s in outputs], dim=1)
-        else:
-            y = None
-        return y, (inputs, outputs, cache_inputs, cache_outputs)
-
-    def backward(self, cache, loss=None):
-        inputs, outputs, cache_inputs, cache_outputs = cache
-        if self.pipeline_parallel_group_rank == self.pipeline_parallel_size - 1:
-            assert loss is not None
-            grad_outputs = torch.autograd.grad(loss, outputs.ravel())
-            grad_outputs = np.array(grad_outputs, dtype='O').reshape(self.n_batch_slices, self.n_input_slices)
-        else:
-            unsliced_grad_outputs = self.layers.create_inputs_empty()
-            grad_outputs = self.create_slices(unsliced_grad_outputs, requires_grad=False)
-            del unsliced_grad_outputs
-        self.backward_step(grad_outputs, inputs, outputs, cache_inputs, cache_outputs)
-        # TODO: need to calculate grad to input x and weights
-
-    def create_slices(self, x, requires_grad):
-        # This function will be overrided by other classes. Do not delete it.
-        return grid_slice_batch_and_sequence(x, self.batch_slices, self.seq_slices, requires_grad=requires_grad)
-
-
+        return outputs, (cache_inputs, cache_outputs)
