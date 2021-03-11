@@ -79,7 +79,8 @@ class TransformerLayers(nn.Module):
         return x, cache_outputs
 
     def create_inputs_empty(self, batch_size, seq_len, device='cuda'):
-        x = torch.empty((seq_len, batch_size, self.embedding_dim), device=device, dtype=torch.float16 if self.mixed_precision else torch.float32)
+        x = torch.empty((seq_len, batch_size, self.embedding_dim), device=device,
+                        dtype=torch.float16 if self.mixed_precision else torch.float32)
         return x
 
 
@@ -139,10 +140,6 @@ class PipelineRecvOperator(torch.autograd.Function):
         return None
 
 
-pipeline_send = PipelineSendOperator.apply
-pipeline_recv = PipelineRecvOperator.apply
-
-
 def terapipe_backward(outputs, grad_outputs, cache_inputs, cache_outputs):
     n_batch_slices, n_input_slices = outputs.size()
     for batch_id in reversed(range(n_batch_slices)):
@@ -158,35 +155,71 @@ def terapipe_backward(outputs, grad_outputs, cache_inputs, cache_outputs):
             da = [t.grad for t in cache_inputs[batch_id, input_id]]
 
 
-class TeraPipeBackwardPassWithCat(torch.autograd.Function):
+class TeraPipeBackwardPassHook(torch.autograd.Function):
     @staticmethod
     def forward(ctx, outputs, cache_inputs, cache_outputs):
-        # FIXME: may need a phony input x here
         ctx.outputs = outputs
         ctx.cache_inputs = cache_inputs
         ctx.cache_outputs = cache_outputs
-        y = torch.cat([torch.cat(s.tolist(), dim=0) for s in outputs], dim=1)
-        return y
+        return torch.tensor(0)
 
     @staticmethod
-    def backward(ctx, grad_x):
+    def backward(ctx, _):
+        n_batch_slices, n_input_slices = ctx.outputs.size()
+        grad_outputs = np.empty((n_batch_slices, n_input_slices), dtype='O')
+        for i in range(n_batch_slices):
+            for j in range(n_input_slices):
+                grad_outputs[i, j] = torch.empty_like(ctx.outputs[i, j])
+        terapipe_backward(ctx.outputs, grad_outputs, ctx.cache_inputs, ctx.cache_outputs)
         del ctx.outputs
         del ctx.cache_inputs
         del ctx.cache_outputs
-        # TODO: finish backward here
+        return None, None, None
+
+
+class ScatterWithTeraPipeBackwardPass(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, outputs, cache_inputs, cache_outputs, batch_slices, seq_slices, batch_dim=1, sequence_dim=0):
+        ctx.outputs = outputs
+        ctx.cache_inputs = cache_inputs
+        ctx.cache_outputs = cache_outputs
+        ctx.batch_slices = batch_slices
+        ctx.seq_slices = seq_slices
+        ctx.batch_dim = batch_dim
+        ctx.sequence_dim = sequence_dim
+        y = torch.cat([torch.cat(s.tolist(), dim=sequence_dim) for s in outputs], dim=batch_dim)
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_y):
+        grad_outputs = grid_slice_batch_and_sequence(
+            grad_y, batch_slices=ctx.batch_slices, seq_slices=ctx.seq_slices,
+            batch_dim=ctx.batch_dim, sequence_dim=ctx.sequence_dim, requires_grad=False)
+        terapipe_backward(ctx.outputs, grad_outputs, ctx.cache_inputs, ctx.cache_outputs)
+        del ctx.outputs
+        del ctx.cache_inputs
+        del ctx.cache_outputs
+        del ctx.batch_slices
+        del ctx.seq_slices
+        del ctx.batch_dim
+        del ctx.sequence_dim
+        return None, None, None, None, None, None, None
+
+
+pipeline_send = PipelineSendOperator.apply
+pipeline_recv = PipelineRecvOperator.apply
+terapipe_backward_hook = TeraPipeBackwardPassHook.apply
+scatter_with_terapipe_backward = ScatterWithTeraPipeBackwardPass.apply
 
 
 class TeraPipe:
-    def __init__(self, layers, batch_size, seq_len, batch_slices, seq_slices):
-        # Some assumptions about layers:
-        #   forward maps from (x, cache, cache_len) to (x, new_cache, cache_outputs):
-        #   x's shape is (sequence, batch, ...)
-        #   caches' shape are (batch, sequence, ...)
+    def __init__(self, layers, batch_size, seq_len, batch_slices, seq_slices, batch_dim=1, sequence_dim=0):
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.batch_slices = batch_slices
         self.seq_slices = seq_slices
-
+        self.batch_dim = batch_dim
+        self.sequence_dim = sequence_dim
         self.layers = layers
 
     @property
@@ -203,13 +236,13 @@ class TeraPipe:
         outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
 
         for batch_id in range(self.n_batch_slices):
-            slice_batch_size = inputs[batch_id, 0].size(1)
+            slice_batch_size = inputs[batch_id, 0].size(self.batch_dim)
             cache = self.layers.create_cache(slice_batch_size, self.seq_len)
             cache_len = 0
             for input_id in range(self.n_input_slices):
                 x = inputs[batch_id, input_id]
                 x = pipeline_recv(x)
-                slice_seq_len = x.size(0)
+                slice_seq_len = x.size(self.sequence_dim)
                 cache = [c.detach().requires_grad_() for c in cache]
                 y, cache_output = self.layers(x, cache, cache_len)
                 y = pipeline_send(y)
@@ -218,4 +251,11 @@ class TeraPipe:
                 cache = cache_output
                 outputs[batch_id, input_id] = y
                 cache_len += slice_seq_len
-        return outputs, (cache_inputs, cache_outputs)
+
+        if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
+            y = scatter_with_terapipe_backward(
+                outputs, cache_inputs, cache_outputs, self.batch_slices,
+                self.seq_slices, batch_dim=self.batch_dim, sequence_dim=self.sequence_dim)
+        else:
+            y = terapipe_backward_hook(outputs, cache_inputs, cache_outputs)
+        return y

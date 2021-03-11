@@ -387,16 +387,18 @@ def uniform_slice_layers(transformer_layers, n_devices=None):
     return nested_layers
 
 
-def grid_slice_batch_and_sequence(x, batch_slices, seq_slices, requires_grad=False):
-    seq_len, batch_size, _ = x.size()
+def grid_slice_batch_and_sequence(x, batch_slices, seq_slices, requires_grad=False, batch_dim=1, sequence_dim=0):
+    seq_len = x.size(sequence_dim)
+    batch_size = x.size(batch_dim)
     sliced_batch = np.empty((len(batch_slices), len(seq_slices)), dtype='O')
     start_batch_index = 0
     for i, batch_size_slice in enumerate(batch_slices):
         start_input_index = 0
         for j, seq_len_slice in enumerate(seq_slices):
-            sliced_batch[i, j] = (x[start_input_index:start_input_index + seq_len_slice,
-                                  start_batch_index:start_batch_index + batch_size_slice].contiguous())
-            sliced_batch[i, j].requires_grad_(requires_grad)
+            sequence_index = torch.arange(start_input_index, start_input_index + seq_len_slice)
+            batch_index = torch.arange(start_batch_index, start_batch_index + batch_size_slice)
+            sliced_batch[i, j] = (x.index_select(sequence_dim, sequence_index).index_select(batch_dim, batch_index)
+                                  .contiguous().requires_grad_(requires_grad))
             start_input_index += seq_len_slice
         assert start_input_index == seq_len
         start_batch_index += batch_size_slice
