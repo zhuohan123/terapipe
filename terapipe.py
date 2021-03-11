@@ -42,6 +42,10 @@ def initialize_distributed_env(distributed_init_method, rank, local_rank, world_
     mpu.model_parallel_cuda_manual_seed(0)
 
 
+def loss_func(y):
+    return torch.mean(y)
+
+
 class TransformerLayers(nn.Module):
     def __init__(self, n_layers, embedding_dim, ffn_embedding_dim, num_attention_heads, mixed_precision=True):
         super().__init__()
@@ -212,7 +216,7 @@ terapipe_backward_hook = TeraPipeBackwardPassHook.apply
 scatter_with_terapipe_backward = ScatterWithTeraPipeBackwardPass.apply
 
 
-class TeraPipe:
+class TeraPipe(nn.Module):
     def __init__(self, layers, batch_size, seq_len, batch_slices, seq_slices, batch_dim=1, sequence_dim=0):
         self.batch_size = batch_size
         self.seq_len = seq_len
@@ -230,7 +234,13 @@ class TeraPipe:
     def n_input_slices(self):
         return len(self.seq_slices)
 
-    def forward(self, inputs):
+    def forward(self, inputs=None):
+        if inputs is None:
+            assert mpu.get_pipeline_parallel_group_rank() > 0
+            inputs = self.layers.create_inputs_empty(self.batch_size, self.seq_len)
+            inputs = grid_slice_batch_and_sequence(
+                inputs, batch_slices=self.batch_slices, seq_slices=self.seq_slices,
+                batch_dim=self.batch_dim, sequence_dim=self.sequence_dim, requires_grad=False)
         cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
         cache_outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
         outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
@@ -259,3 +269,57 @@ class TeraPipe:
         else:
             y = terapipe_backward_hook(outputs, cache_inputs, cache_outputs)
         return y
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='TeraPipe')
+    parser.add_argument('ip_address', type=str, help='the IP address of the head node')
+    parser.add_argument('-p', '--port', type=int, help='the port of the head node')
+    parser.add_argument('--rank', metavar='I', type=int, default=0)
+    parser.add_argument('--local-rank', metavar='I', type=int, default=0)
+    parser.add_argument('--world-size', metavar='N', type=int, default=1)
+    parser.add_argument('--model-parallel-size', metavar='N', type=int, default=1)
+    parser.add_argument('--pipeline-parallel-size', metavar='N', type=int, default=1)
+    parser.add_argument('--model', metavar='NAME', type=str, default=None,
+                        choices=list(MODEL_CONFIGS.keys()))
+    parser.add_argument('--batch-size', metavar='N', type=int, default=1)
+    parser.add_argument('--n-batch-slices', metavar='N', type=int, default=1)
+    parser.add_argument('--n-input-slices', metavar='N', type=int, default=1)
+    parser.add_argument('--n-steps', metavar='N', type=int, default=10)
+    parser.add_argument('--mixed-precision', action='store_true', default=False)
+    parser.add_argument('--use-mpi', action='store_true', default=False)
+
+    args = parser.parse_args()
+    if args.use_mpi:
+        args.world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE'))
+        args.rank = int(os.getenv('OMPI_COMM_WORLD_RANK'))
+        args.local_rank = int(os.getenv('OMPI_COMM_WORLD_LOCAL_RANK'))
+    distributed_init_method = f'tcp://{args.ip_address}:{args.port}'
+
+    initialize_distributed_env(
+        distributed_init_method, args.rank, args.local_rank, args.world_size,
+        args.model_parallel_size, args.pipeline_parallel_size)
+
+    config = TransformerConfig.from_predefined_model(
+        args.model, n_devices=args.world_size, batch_size=args.batch_size)
+
+    layers = TransformerLayers(
+        config.n_layers, config.embedding_dim, config.ffn_embedding_dim,
+        config.num_attention_heads)
+    seq_slices = uniform_slice(config.seq_len, args.n_input_slices)
+    batch_slices = uniform_slice(config.batch_size, args.n_batch_slices)
+    pipelined_layers = TeraPipe(layers, config.batch_size, config.seq_len, batch_slices, seq_slices)
+    optimizer = torch.optim.SGD(pipelined_layers.parameters(), lr=0.001)
+    optimizer.zero_grad()
+
+    if mpu.get_pipeline_parallel_group_rank() == 0:
+        x = layers.create_inputs_empty(config.batch_size, config.seq_len)
+    else:
+        x = None
+    y = pipelined_layers(x)
+    if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_group_rank() - 1:
+        loss = loss_func(y)
+        loss.backward()
+    else:
+        y.backward()
+    optimizer.step()
