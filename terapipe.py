@@ -149,7 +149,7 @@ def terapipe_backward(outputs, grad_outputs, cache_inputs, cache_outputs):
     n_batch_slices, n_input_slices = outputs.shape
     for batch_id in reversed(range(n_batch_slices)):
         da = []
-        for input_id in reversed(n_input_slices):
+        for input_id in reversed(range(n_input_slices)):
             y = outputs[batch_id, input_id]
             dy = grad_outputs[batch_id, input_id]
             if input_id < n_input_slices - 1:
@@ -184,7 +184,7 @@ class TeraPipeBackwardPassHook(torch.autograd.Function):
 
 class ScatterWithTeraPipeBackwardPass(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, outputs, cache_inputs, cache_outputs, batch_slices, seq_slices, batch_dim=1, sequence_dim=0):
+    def forward(ctx, outputs, cache_inputs, cache_outputs, batch_slices, seq_slices, batch_dim, sequence_dim):
         ctx.outputs = outputs
         ctx.cache_inputs = cache_inputs
         ctx.cache_outputs = cache_outputs
@@ -272,7 +272,7 @@ class TeraPipe(nn.Module):
         if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
             y = scatter_with_terapipe_backward(
                 outputs, cache_inputs, cache_outputs, self.batch_slices,
-                self.seq_slices, batch_dim=self.batch_dim, sequence_dim=self.sequence_dim)
+                self.seq_slices, self.batch_dim, self.sequence_dim)
         else:
             y = terapipe_backward_hook(outputs, cache_inputs, cache_outputs)
         return y
