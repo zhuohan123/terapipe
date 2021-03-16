@@ -146,7 +146,7 @@ class PipelineRecvOperator(torch.autograd.Function):
 
 
 def terapipe_backward(outputs, grad_outputs, cache_inputs, cache_outputs):
-    n_batch_slices, n_input_slices = outputs.size()
+    n_batch_slices, n_input_slices = outputs.shape
     for batch_id in reversed(range(n_batch_slices)):
         da = []
         for input_id in reversed(n_input_slices):
@@ -170,7 +170,7 @@ class TeraPipeBackwardPassHook(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, _):
-        n_batch_slices, n_input_slices = ctx.outputs.size()
+        n_batch_slices, n_input_slices = ctx.outputs.shape
         grad_outputs = np.empty((n_batch_slices, n_input_slices), dtype='O')
         for i in range(n_batch_slices):
             for j in range(n_input_slices):
