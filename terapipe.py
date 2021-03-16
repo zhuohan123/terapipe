@@ -162,11 +162,11 @@ def terapipe_backward(outputs, grad_outputs, cache_inputs, cache_outputs):
 
 class TeraPipeBackwardPassHook(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, outputs, cache_inputs, cache_outputs):
+    def forward(ctx, backward_helper, outputs, cache_inputs, cache_outputs):
         ctx.outputs = outputs
         ctx.cache_inputs = cache_inputs
         ctx.cache_outputs = cache_outputs
-        return torch.tensor(0.0, requires_grad=True)
+        return backward_helper
 
     @staticmethod
     def backward(ctx, _):
@@ -211,9 +211,14 @@ class ScatterWithTeraPipeBackwardPass(torch.autograd.Function):
         return None, None, None, None, None, None, None
 
 
+def terapipe_backward_hook(outputs, cache_inputs, cache_outputs):
+    backward_helper = torch.tensor(0.0, requires_grad=True)
+    backward_helper = TeraPipeBackwardPassHook.apply(backward_helper, outputs, cache_inputs, cache_outputs)
+    return backward_helper
+
+
 pipeline_send = PipelineSendOperator.apply
 pipeline_recv = PipelineRecvOperator.apply
-terapipe_backward_hook = TeraPipeBackwardPassHook.apply
 scatter_with_terapipe_backward = ScatterWithTeraPipeBackwardPass.apply
 
 
