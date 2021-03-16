@@ -218,6 +218,7 @@ scatter_with_terapipe_backward = ScatterWithTeraPipeBackwardPass.apply
 
 class TeraPipe(nn.Module):
     def __init__(self, layers, batch_size, seq_len, batch_slices, seq_slices, batch_dim=1, sequence_dim=0):
+        super().__init__()
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.batch_slices = batch_slices
