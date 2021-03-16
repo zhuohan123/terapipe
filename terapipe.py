@@ -310,16 +310,17 @@ if __name__ == "__main__":
     batch_slices = uniform_slice(config.batch_size, args.n_batch_slices)
     pipelined_layers = TeraPipe(layers, config.batch_size, config.seq_len, batch_slices, seq_slices)
     optimizer = torch.optim.SGD(pipelined_layers.parameters(), lr=0.001)
-    optimizer.zero_grad()
+    for _ in range(args.n_steps):
+        optimizer.zero_grad()
 
-    if mpu.get_pipeline_parallel_group_rank() == 0:
-        x = layers.create_inputs_empty(config.batch_size, config.seq_len)
-    else:
-        x = None
-    y = pipelined_layers(x)
-    if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_group_rank() - 1:
-        loss = loss_func(y)
-        loss.backward()
-    else:
-        y.backward()
-    optimizer.step()
+        if mpu.get_pipeline_parallel_group_rank() == 0:
+            x = layers.create_inputs_empty(config.batch_size, config.seq_len)
+        else:
+            x = None
+        y = pipelined_layers(x)
+        if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_group_rank() - 1:
+            loss = loss_func(y)
+            loss.backward()
+        else:
+            y.backward()
+        optimizer.step()
