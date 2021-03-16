@@ -179,7 +179,7 @@ class TeraPipeBackwardPassHook(torch.autograd.Function):
         del ctx.outputs
         del ctx.cache_inputs
         del ctx.cache_outputs
-        return None, None, None
+        return None, None, None, None
 
 
 class ScatterWithTeraPipeBackwardPass(torch.autograd.Function):
