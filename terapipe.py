@@ -225,7 +225,7 @@ class TeraPipe(nn.Module):
         self.seq_slices = seq_slices
         self.batch_dim = batch_dim
         self.sequence_dim = sequence_dim
-        self.layers = layers
+        self.layers = nn.ModuleList(layers)
 
     @property
     def n_batch_slices(self):
