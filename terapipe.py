@@ -63,6 +63,7 @@ class TransformerLayers(nn.Module):
                 device="cuda",
             )
             self.layers.append(layer.half() if self.mixed_precision else layer)
+        self.layers = nn.ModuleList(self.layers)
 
     def create_cache(self, batch_size, seq_len):
         cache = []
@@ -225,7 +226,7 @@ class TeraPipe(nn.Module):
         self.seq_slices = seq_slices
         self.batch_dim = batch_dim
         self.sequence_dim = sequence_dim
-        self.layers = nn.ModuleList(layers)
+        self.layers = layers
 
     @property
     def n_batch_slices(self):
