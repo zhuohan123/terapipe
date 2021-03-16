@@ -249,7 +249,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
         else:
             attn = attn_helper(q, k, v)
         attn = self.out_proj(attn)
-        return attn, (new_k, new_v)
+        return attn, (cache_k, cache_v)
 
     def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
         # self.batch_size * self.num_attention_heads, length, self.attention_heads_dim

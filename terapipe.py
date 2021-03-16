@@ -166,7 +166,7 @@ class TeraPipeBackwardPassHook(torch.autograd.Function):
         ctx.outputs = outputs
         ctx.cache_inputs = cache_inputs
         ctx.cache_outputs = cache_outputs
-        return torch.tensor(0)
+        return torch.tensor(0.0, requires_grad=True)
 
     @staticmethod
     def backward(ctx, _):
@@ -242,7 +242,7 @@ class TeraPipe(nn.Module):
             inputs = self.layers.create_inputs_empty(self.batch_size, self.seq_len)
         inputs = grid_slice_batch_and_sequence(
             inputs, batch_slices=self.batch_slices, seq_slices=self.seq_slices,
-            batch_dim=self.batch_dim, sequence_dim=self.sequence_dim, requires_grad=False)
+            batch_dim=self.batch_dim, sequence_dim=self.sequence_dim, requires_grad=True)
         cache_inputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
         cache_outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
         outputs = np.empty((self.n_batch_slices, self.n_input_slices), dtype='O')
