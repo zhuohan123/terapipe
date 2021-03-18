@@ -398,7 +398,7 @@ def grid_slice_batch_and_sequence(x, batch_slices, seq_slices, requires_grad=Fal
             sequence_index = torch.arange(start_input_index, start_input_index + seq_len_slice, device=x.device)
             batch_index = torch.arange(start_batch_index, start_batch_index + batch_size_slice, device=x.device)
             sliced_batch[i, j] = (x.index_select(sequence_dim, sequence_index).index_select(batch_dim, batch_index)
-                                  .contiguous().requires_grad_(requires_grad))
+                                  .detach().contiguous().requires_grad_(requires_grad))
             start_input_index += seq_len_slice
         assert start_input_index == seq_len
         start_batch_index += batch_size_slice
