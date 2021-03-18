@@ -266,7 +266,7 @@ class TeraPipe(nn.Module):
         return y
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description='TeraPipe')
     parser.add_argument('ip_address', type=str, help='the IP address of the head node')
     parser.add_argument('-p', '--port', type=int, help='the port of the head node')
@@ -283,6 +283,7 @@ if __name__ == "__main__":
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
+    parser.add_argument('--save-model', action='store_true', default=False)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -304,6 +305,9 @@ if __name__ == "__main__":
     seq_slices = uniform_slice(config.seq_len, args.n_input_slices)
     batch_slices = uniform_slice(config.batch_size, args.n_batch_slices)
     pipelined_layers = TeraPipe(layers, config.batch_size, config.seq_len, batch_slices, seq_slices)
+    if args.save_model:
+        torch.save(pipelined_layers.state_dict(), f"model.ckpt.{args.rank}")
+        return
     optimizer = torch.optim.SGD(pipelined_layers.parameters(), lr=0.001)
     try:
         for _ in range(args.n_steps):
@@ -323,3 +327,7 @@ if __name__ == "__main__":
     except:
         print(f"rank={args.rank}", traceback.format_exc())
         exit(1)
+
+
+if __name__ == "__main__":
+    main()
