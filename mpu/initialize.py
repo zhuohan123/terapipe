@@ -143,6 +143,22 @@ def get_model_parallel_dst_rank():
     return (_RANK // _MODEL_PARALLEL_SIZE) * _MODEL_PARALLEL_SIZE + _MODEL_PARALLEL_SIZE - 1
 
 
+def get_model_parallel_next_src_rank():
+    assert _INITIALIZED
+    if get_pipeline_parallel_group_rank() < get_pipeline_parallel_world_size() - 1:
+        return get_model_parallel_src_rank() + get_model_parallel_world_size()
+    else:
+        return None
+
+
+def get_model_parallel_prev_dst_rank():
+    assert _INITIALIZED
+    if get_pipeline_parallel_group_rank() > 0:
+        return get_model_parallel_dst_rank() - get_model_parallel_world_size()
+    else:
+        return None
+
+
 def get_data_parallel_world_size():
     """Return world size for the data parallel group."""
     assert _INITIALIZED

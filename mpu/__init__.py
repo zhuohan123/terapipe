@@ -27,10 +27,13 @@ from .initialize import get_model_parallel_group
 from .initialize import get_model_parallel_rank
 from .initialize import get_model_parallel_src_rank
 from .initialize import get_model_parallel_dst_rank
+from .initialize import get_model_parallel_next_src_rank
+from .initialize import get_model_parallel_prev_dst_rank
 from .initialize import get_model_parallel_world_size
 from .initialize import get_pipeline_parallel_pred_group
 from .initialize import get_pipeline_parallel_succ_group
 from .initialize import get_pipeline_parallel_group_rank
+from .initialize import get_pipeline_parallel_world_size
 from .initialize import initialize_model_parallel
 from .initialize import model_parallel_is_initialized
 

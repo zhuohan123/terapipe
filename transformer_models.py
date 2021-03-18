@@ -177,15 +177,17 @@ class TransformerConfig:
 class _AssignCache(torch.autograd.Function):
     # Adapted from https://discuss.pytorch.org/t/disable-in-place-correctness-version-check-any-other-workaround/90738/4
     @staticmethod
-    def forward(ctx, cache, value, start, end):
-        ctx.start = start
-        ctx.end = end
-        cache.data[:, start:end, :] = value
+    def forward(ctx, cache, value, index):
+        ctx.index = index
+        cache.data[index] = value
         return cache
 
     @staticmethod
-    def backward(ctx, grad_cache):
-        return grad_cache, grad_cache[:, ctx.start:ctx.end, :], None, None
+    def backward(ctx, grad_cache_output):
+        grad_value = grad_cache_output[ctx.index]
+        grad_cache = grad_cache_output.clone()
+        grad_cache.data[ctx.index] = 0
+        return grad_cache, grad_value, None, None
 
 
 assign_cache_ = _AssignCache.apply
@@ -219,8 +221,9 @@ class MultiheadLMAttentionWithCache(nn.Module):
         if full_cache is not None:
             src_len = cache_len + tgt_len
             cache_k, cache_v = full_cache
-            cache_k = assign_cache_(cache_k, new_k, cache_len, src_len)
-            cache_v = assign_cache_(cache_v, new_v, cache_len, src_len)
+            cache_slice_index = (slice(None), slice(cache_len, src_len), slice(None))
+            cache_k = assign_cache_(cache_k, new_k, cache_slice_index)
+            cache_v = assign_cache_(cache_v, new_v, cache_slice_index)
             k = cache_k[:, :src_len, :]
             v = cache_v[:, :src_len, :]
             attn_mask = torch.cat([x.new_zeros(tgt_len, cache_len), attn_mask], dim=1)
@@ -246,7 +249,7 @@ class MultiheadLMAttentionWithCache(nn.Module):
         else:
             attn = attn_helper(q, k, v)
         attn = self.out_proj(attn)
-        return attn, (new_k, new_v)
+        return attn, (cache_k, cache_v)
 
     def create_attn_cache(self, batch_size, seq_len, device='cuda', dtype=torch.float32):
         # self.batch_size * self.num_attention_heads, length, self.attention_heads_dim
@@ -384,16 +387,18 @@ def uniform_slice_layers(transformer_layers, n_devices=None):
     return nested_layers
 
 
-def grid_slice_batch_and_sequence(x, batch_slices, seq_slices, requires_grad=False):
-    seq_len, batch_size, _ = x.size()
+def grid_slice_batch_and_sequence(x, batch_slices, seq_slices, requires_grad=False, batch_dim=1, sequence_dim=0):
+    seq_len = x.size(sequence_dim)
+    batch_size = x.size(batch_dim)
     sliced_batch = np.empty((len(batch_slices), len(seq_slices)), dtype='O')
     start_batch_index = 0
     for i, batch_size_slice in enumerate(batch_slices):
         start_input_index = 0
         for j, seq_len_slice in enumerate(seq_slices):
-            sliced_batch[i, j] = (x[start_input_index:start_input_index + seq_len_slice,
-                                  start_batch_index:start_batch_index + batch_size_slice].contiguous())
-            sliced_batch[i, j].requires_grad_(requires_grad)
+            sequence_index = torch.arange(start_input_index, start_input_index + seq_len_slice, device=x.device)
+            batch_index = torch.arange(start_batch_index, start_batch_index + batch_size_slice, device=x.device)
+            sliced_batch[i, j] = (x.index_select(sequence_dim, sequence_index).index_select(batch_dim, batch_index)
+                                  .detach().contiguous().requires_grad_(requires_grad))
             start_input_index += seq_len_slice
         assert start_input_index == seq_len
         start_batch_index += batch_size_slice
