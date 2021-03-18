@@ -310,7 +310,7 @@ if __name__ == "__main__":
         else:
             x = None
         y = pipelined_layers(x)
-        if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_group_rank() - 1:
+        if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
             loss = loss_func(y)
             loss.backward()
         else:
