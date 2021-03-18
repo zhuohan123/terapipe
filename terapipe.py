@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+import traceback
 from itertools import chain, product
 from types import FunctionType
 from typing import Callable, List
@@ -196,10 +197,12 @@ class TeraPipeBackwardPassHook(torch.autograd.Function):
 
 
 def terapipe_backward_hook(outputs, cache_inputs, cache_outputs, batch_slices, seq_slices, batch_dim=1, sequence_dim=0, cat_outputs=False):
-    if cat_outputs:
-        y = torch.cat([torch.cat(s.tolist(), dim=sequence_dim) for s in outputs], dim=batch_dim)
-    else:
-        y = torch.tensor(0.0, requires_grad=True)
+    with torch.no_grad():
+        if cat_outputs:
+            y = torch.cat([torch.cat(s.tolist(), dim=sequence_dim) for s in outputs], dim=batch_dim)
+        else:
+            y = torch.tensor(0.0)
+    y.requires_grad_()
     y = TeraPipeBackwardPassHook.apply(y, outputs, cache_inputs, cache_outputs, batch_slices, seq_slices, batch_dim, sequence_dim, cat_outputs)
     return y
 
@@ -302,17 +305,21 @@ if __name__ == "__main__":
     batch_slices = uniform_slice(config.batch_size, args.n_batch_slices)
     pipelined_layers = TeraPipe(layers, config.batch_size, config.seq_len, batch_slices, seq_slices)
     optimizer = torch.optim.SGD(pipelined_layers.parameters(), lr=0.001)
-    for _ in range(args.n_steps):
-        optimizer.zero_grad()
+    try:
+        for _ in range(args.n_steps):
+            optimizer.zero_grad()
 
-        if mpu.get_pipeline_parallel_group_rank() == 0:
-            x = layers.create_inputs_empty(config.batch_size, config.seq_len)
-        else:
-            x = None
-        y = pipelined_layers(x)
-        if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
-            loss = loss_func(y)
-            loss.backward()
-        else:
-            y.backward()
-        optimizer.step()
+            if mpu.get_pipeline_parallel_group_rank() == 0:
+                x = layers.create_inputs_empty(config.batch_size, config.seq_len)
+            else:
+                x = None
+            y = pipelined_layers(x)
+            if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
+                loss = loss_func(y)
+                loss.backward()
+            else:
+                y.backward()
+            optimizer.step()
+    except:
+        print(f"rank={args.rank}", traceback.format_exc())
+        exit(1)
