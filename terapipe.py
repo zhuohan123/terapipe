@@ -299,6 +299,8 @@ def main():
     config = TransformerConfig.from_predefined_model(
         args.model, n_devices=args.world_size, batch_size=args.batch_size)
 
+    config.n_layers = config.n_layers // args.pipeline_parallel_size + int(mpu.get_pipeline_parallel_group_rank() < args.pipeline_parallel_size)
+
     layers = TransformerLayers(
         config.n_layers, config.embedding_dim, config.ffn_embedding_dim,
         config.num_attention_heads)
