@@ -316,6 +316,7 @@ def verify_one_step(args):
     if args.verify == "save":
         assert mpu.get_pipeline_parallel_world_size() == 1
         assert mpu.get_model_parallel_world_size() == 1
+        os.makedirs(args.verify_path, exist_ok=True)
     config, layers, pipelined_layers = initialize_model(args)
     if mpu.get_pipeline_parallel_group_rank() == 0:
         x = layers.create_inputs(config.batch_size, config.seq_len, random=True)
