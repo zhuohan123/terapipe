@@ -315,30 +315,51 @@ def measure_iteration_time(args, n_warmup_steps=2):
 
 def verify_one_step(args):
     if args.verify == "save":
+        assert dist.get_world_size() == 1
         assert mpu.get_pipeline_parallel_world_size() == 1
         assert mpu.get_model_parallel_world_size() == 1
         os.makedirs(args.verify_path, exist_ok=True)
-    config, layers, pipelined_layers = initialize_model(args)
-    if mpu.get_pipeline_parallel_group_rank() == 0:
-        x = layers.create_inputs(config.batch_size, config.seq_len, random=True)
-        if args.verify == "save":
+        config, layers, pipelined_layers = initialize_model(args)
+        if mpu.get_pipeline_parallel_group_rank() == 0:
+            x = layers.create_inputs(config.batch_size, config.seq_len, random=True)
             torch.save(x, os.path.join(args.verify_path, 'input.pt'))
-    else:
-        x = None
-    try:
-        y = pipelined_layers(x)
-        if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
-            loss = loss_func(y)
-            loss.backward()
         else:
-            y.backward()
-    except:
-        print(f"rank={args.rank}", traceback.format_exc())
-        raise
-    if args.verify == "save":
-        torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, f'model.ckpt.{args.rank}'))
+            x = None
+        try:
+            y = pipelined_layers(x)
+            if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
+                loss = loss_func(y)
+                loss.backward()
+            else:
+                y.backward()
+        except:
+            print(f"rank={args.rank}", traceback.format_exc())
+            raise
+        torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, 'model.ckpt'))
         grad_dic = OrderedDict((x[0], x[1].grad) for x in pipelined_layers.named_parameters())
-        torch.save(grad_dic, os.path.join(args.verify_path, f'model.grad.ckpt.{args.rank}'))
+        torch.save(grad_dic, os.path.join(args.verify_path, 'model.grad.ckpt'))
+    else:
+        assert args.verify == "load"
+        config, layers, pipelined_layers = initialize_model(args)
+        saved_state_dict = os.path.join(args.verify_path, 'model.ckpt')
+        if mpu.get_pipeline_parallel_group_rank() == 0:
+            x = torch.load(os.path.join(args.verify_path, 'input.pt'))
+        else:
+            x = None
+        try:
+            y = pipelined_layers(x)
+            if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
+                loss = loss_func(y)
+                loss.backward()
+            else:
+                y.backward()
+        except:
+            print(f"rank={args.rank}", traceback.format_exc())
+            raise
+        torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, 'model.ckpt'))
+        grad_dic = OrderedDict((x[0], x[1].grad) for x in pipelined_layers.named_parameters())
+        torch.save(grad_dic, os.path.join(args.verify_path, 'model.grad.ckpt'))
+
 
 
 
