@@ -2,6 +2,7 @@ import argparse
 import os
 import time
 import traceback
+from collections import OrderedDict
 from itertools import chain, product
 from types import FunctionType
 from typing import Callable, List
@@ -336,7 +337,7 @@ def verify_one_step(args):
         raise
     if args.verify == "save":
         torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, f'model.ckpt.{args.rank}'))
-        grad_dic = {x[0]:x[1].grad for x in pipelined_layers.named_parameters()}
+        grad_dic = OrderedDict((x[0], x[1].grad) for x in pipelined_layers.named_parameters())
         torch.save(grad_dic, os.path.join(args.verify_path, f'model.grad.ckpt.{args.rank}'))
 
 
