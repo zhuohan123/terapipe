@@ -274,7 +274,10 @@ def initialize_model(args):
     config = TransformerConfig.from_predefined_model(
         args.model, n_devices=args.world_size, batch_size=args.batch_size)
 
-    config.n_layers = config.n_layers // args.pipeline_parallel_size + int(mpu.get_pipeline_parallel_group_rank() < args.pipeline_parallel_size)
+    config.n_total_layers = config.n_layers
+    config.n_layers = (config.n_total_layers // args.pipeline_parallel_size
+                       + int(mpu.get_pipeline_parallel_group_rank()
+                             < config.n_total_layers % args.pipeline_parallel_size))
 
     layers = TransformerLayers(
         config.n_layers, config.embedding_dim, config.ffn_embedding_dim,
@@ -343,7 +346,18 @@ def verify_one_step(args):
     else:
         assert args.verify == "load"
         config, layers, pipelined_layers = initialize_model(args)
-        saved_state_dict = os.path.join(args.verify_path, 'model.ckpt')
+        loaded_state_dict = os.path.join(args.verify_path, 'model.ckpt')
+        sliced_state_dict = OrderedDict()
+        start_layer_id = (config.n_total_layers // args.pipeline_parallel_size * mpu.get_pipeline_parallel_group_rank()
+                          + min(mpu.get_pipeline_parallel_group_rank(),
+                                config.n_total_layers % args.pipeline_parallel_size))
+        end_layer_id = start_layer_id + config.n_layers
+        print(f"rank={args.rank} layer_id range: [{start_layer_id}, {end_layer_id})")
+        exit(1)
+        for key, value in loaded_state_dict.items():
+            keys = key.split('.')
+            global_layer_id = int(keys[2])
+        pipelined_layers.load_state_dict(sliced_state_dict)
         if mpu.get_pipeline_parallel_group_rank() == 0:
             x = torch.load(os.path.join(args.verify_path, 'input.pt'))
         else:
