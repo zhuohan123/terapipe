@@ -318,6 +318,8 @@ def verify_one_step(args):
         assert dist.get_world_size() == 1
         assert mpu.get_pipeline_parallel_world_size() == 1
         assert mpu.get_model_parallel_world_size() == 1
+        assert args.n_input_slices == 1
+        assert args.n_batch_slices == 1
         os.makedirs(args.verify_path, exist_ok=True)
         config, layers, pipelined_layers = initialize_model(args)
         if mpu.get_pipeline_parallel_group_rank() == 0:
