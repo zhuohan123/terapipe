@@ -8,7 +8,7 @@ from typing import Callable, List
 import gc
 import json
 
-from apex import optimizers
+from apex.optimizers import FusedAdam
 import numpy as np
 import torch
 from torch import nn
@@ -83,9 +83,13 @@ class TransformerLayers(nn.Module):
             cache_outputs += [k_output, v_output]
         return x, cache_outputs
 
-    def create_inputs_empty(self, batch_size, seq_len, device='cuda'):
-        x = torch.empty((seq_len, batch_size, self.embedding_dim), device=device,
-                        dtype=torch.float16 if self.mixed_precision else torch.float32)
+    def create_inputs(self, batch_size, seq_len, device='cuda', random=False):
+        if not random:
+            x = torch.empty((seq_len, batch_size, self.embedding_dim), device=device,
+                            dtype=torch.float16 if self.mixed_precision else torch.float32)
+        else:
+            x = torch.randn((seq_len, batch_size, self.embedding_dim), device=device,
+                            dtype=torch.float16 if self.mixed_precision else torch.float32)
         return x
 
 
@@ -232,7 +236,7 @@ class TeraPipe(nn.Module):
     def forward(self, inputs=None):
         if inputs is None:
             assert mpu.get_pipeline_parallel_group_rank() > 0
-            inputs = self.layers.create_inputs_empty(self.batch_size, self.seq_len)
+            inputs = self.layers.create_inputs(self.batch_size, self.seq_len)
         inputs = grid_slice_batch_and_sequence(
             inputs, batch_slices=self.batch_slices, seq_slices=self.seq_slices,
             batch_dim=self.batch_dim, sequence_dim=self.sequence_dim, requires_grad=True)
@@ -265,6 +269,75 @@ class TeraPipe(nn.Module):
         return y
 
 
+def initialize_model(args):
+    config = TransformerConfig.from_predefined_model(
+        args.model, n_devices=args.world_size, batch_size=args.batch_size)
+
+    config.n_layers = config.n_layers // args.pipeline_parallel_size + int(mpu.get_pipeline_parallel_group_rank() < args.pipeline_parallel_size)
+
+    layers = TransformerLayers(
+        config.n_layers, config.embedding_dim, config.ffn_embedding_dim,
+        config.num_attention_heads, mixed_precision=args.mixed_precision)
+    seq_slices = uniform_slice(config.seq_len, args.n_input_slices)
+    batch_slices = uniform_slice(config.batch_size, args.n_batch_slices)
+    pipelined_layers = TeraPipe(layers, config.batch_size, config.seq_len, batch_slices, seq_slices)
+    return config, layers, pipelined_layers
+
+
+def measure_iteration_time(args):
+    config, layers, pipelined_layers = initialize_model(args)
+    optimizer = torch.optim.Adam(pipelined_layers.parameters(), lr=1e-10)
+    step_times = []
+    for _ in range(args.n_steps):
+        start_time = time.time()
+        optimizer.zero_grad()
+        if mpu.get_pipeline_parallel_group_rank() == 0:
+            x = layers.create_inputs(config.batch_size, config.seq_len, random=True)
+        else:
+            x = None
+        try:
+            y = pipelined_layers(x)
+            if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
+                loss = loss_func(y)
+                loss.backward()
+            else:
+                y.backward()
+        except:
+            print(f"rank={args.rank}", traceback.format_exc())
+            raise
+        optimizer.step()
+        step_time = time.time() - start_time
+        step_times.append(step_time)
+    step_times = np.array(step_times)
+    return np.mean(step_times), np.std(step_times)
+
+
+def verify_one_step(args):
+    if args.verify == "save":
+        assert mpu.get_pipeline_parallel_world_size() == 1
+        assert mpu.get_model_parallel_world_size() == 1
+    config, layers, pipelined_layers = initialize_model(args)
+    if mpu.get_pipeline_parallel_group_rank() == 0:
+        x = layers.create_inputs(config.batch_size, config.seq_len, random=True)
+        if args.verify == "save":
+            torch.save(x, os.path.join(args.verify_path, 'input.pt'))
+    else:
+        x = None
+    try:
+        y = pipelined_layers(x)
+        if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
+            loss = loss_func(y)
+            loss.backward()
+        else:
+            y.backward()
+    except:
+        print(f"rank={args.rank}", traceback.format_exc())
+        raise
+    if args.verify == "save":
+        torch.save(x, os.path.join(args.verify_path, 'model.ckpt.{args.rank}'))
+
+
+
 def main():
     parser = argparse.ArgumentParser(description='TeraPipe')
     parser.add_argument('ip_address', type=str, help='the IP address of the head node')
@@ -282,7 +355,8 @@ def main():
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
-    parser.add_argument('--save-model', metavar='PREFIX', type=str, default=None)
+    parser.add_argument('--verify', metavar='[save/load]', type=str, default=None)
+    parser.add_argument('--verify-path', metavar='PATH', type=str, default=None)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -294,40 +368,10 @@ def main():
     initialize_distributed_env(
         distributed_init_method, args.rank, args.local_rank, args.world_size,
         args.model_parallel_size, args.pipeline_parallel_size)
-
-    config = TransformerConfig.from_predefined_model(
-        args.model, n_devices=args.world_size, batch_size=args.batch_size)
-
-    config.n_layers = config.n_layers // args.pipeline_parallel_size + int(mpu.get_pipeline_parallel_group_rank() < args.pipeline_parallel_size)
-
-    layers = TransformerLayers(
-        config.n_layers, config.embedding_dim, config.ffn_embedding_dim,
-        config.num_attention_heads)
-    seq_slices = uniform_slice(config.seq_len, args.n_input_slices)
-    batch_slices = uniform_slice(config.batch_size, args.n_batch_slices)
-    pipelined_layers = TeraPipe(layers, config.batch_size, config.seq_len, batch_slices, seq_slices)
-    if args.save_model is not None:
-        torch.save(pipelined_layers.state_dict(), f"{args.save_model}.{args.rank}")
-        return
-    optimizer = torch.optim.SGD(pipelined_layers.parameters(), lr=0.001)
-    try:
-        for _ in range(args.n_steps):
-            optimizer.zero_grad()
-
-            if mpu.get_pipeline_parallel_group_rank() == 0:
-                x = layers.create_inputs_empty(config.batch_size, config.seq_len)
-            else:
-                x = None
-            y = pipelined_layers(x)
-            if mpu.get_pipeline_parallel_group_rank() == mpu.get_pipeline_parallel_world_size() - 1:
-                loss = loss_func(y)
-                loss.backward()
-            else:
-                y.backward()
-            optimizer.step()
-    except:
-        print(f"rank={args.rank}", traceback.format_exc())
-        exit(1)
+    if args.verify is not None:
+        verify_one_step(args)
+    else:
+        measure_iteration_time(args)
 
 
 if __name__ == "__main__":
