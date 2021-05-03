@@ -284,11 +284,11 @@ def initialize_model(args):
     return config, layers, pipelined_layers
 
 
-def measure_iteration_time(args):
+def measure_iteration_time(args, n_warmup_steps=2):
     config, layers, pipelined_layers = initialize_model(args)
     optimizer = torch.optim.Adam(pipelined_layers.parameters(), lr=1e-10)
     step_times = []
-    for _ in range(args.n_steps):
+    for _ in range(args.n_steps + n_warmup_steps):
         start_time = time.time()
         optimizer.zero_grad()
         if mpu.get_pipeline_parallel_group_rank() == 0:
@@ -308,7 +308,7 @@ def measure_iteration_time(args):
         optimizer.step()
         step_time = time.time() - start_time
         step_times.append(step_time)
-    step_times = np.array(step_times)
+    step_times = np.array(step_times)[n_warmup_steps:]
     return np.mean(step_times), np.std(step_times)
 
 
@@ -335,7 +335,9 @@ def verify_one_step(args):
         print(f"rank={args.rank}", traceback.format_exc())
         raise
     if args.verify == "save":
-        torch.save(x, os.path.join(args.verify_path, 'model.ckpt.{args.rank}'))
+        torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, f'model.ckpt.{args.rank}'))
+        grad_dic = {x[0]:x[1].grad for x in pipelined_layers.named_parameters()}
+        torch.save(grad_dic, os.path.join(args.verify_path, f'model.grad.ckpt.{args.rank}'))
 
 
 
@@ -372,7 +374,8 @@ def main():
     if args.verify is not None:
         verify_one_step(args)
     else:
-        measure_iteration_time(args)
+        time_mean, time_std = measure_iteration_time(args)
+        print(f"rank={args.rank} Time (s): mean={time_mean}, std={time_std}")
 
 
 if __name__ == "__main__":
