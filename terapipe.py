@@ -271,13 +271,11 @@ class TeraPipe(nn.Module):
 
 
 def initialize_model(args):
-    config = TransformerConfig.from_predefined_model(
-        args.model, n_devices=args.world_size, batch_size=args.batch_size)
-
+    config = TransformerConfig.from_predefined_model(args.model, batch_size=args.batch_size)
     config.n_total_layers = config.n_layers
-    config.n_layers = (config.n_total_layers // args.pipeline_parallel_size
+    config.n_layers = (config.n_total_layers // mpu.get_pipeline_parallel_world_size()
                        + int(mpu.get_pipeline_parallel_group_rank()
-                             < config.n_total_layers % args.pipeline_parallel_size))
+                             < config.n_total_layers % mpu.get_pipeline_parallel_world_size()))
 
     layers = TransformerLayers(
         config.n_layers, config.embedding_dim, config.ffn_embedding_dim,
@@ -316,6 +314,56 @@ def measure_iteration_time(args, n_warmup_steps=2):
     return np.mean(step_times), np.std(step_times)
 
 
+def slice_state_dict(config, loaded_state_dict):
+    sliced_state_dict = OrderedDict()
+    start_layer_id = (config.n_total_layers // mpu.get_pipeline_parallel_world_size() * mpu.get_pipeline_parallel_group_rank()
+                      + min(mpu.get_pipeline_parallel_group_rank(),
+                            config.n_total_layers % mpu.get_pipeline_parallel_world_size()))
+    end_layer_id = start_layer_id + config.n_layers
+    for key, value in loaded_state_dict.items():
+        keys = key.split('.')
+        global_layer_id = int(keys[2])
+        if start_layer_id <= global_layer_id < end_layer_id:
+            local_layer_id = global_layer_id - start_layer_id
+            new_key = '.'.join(keys[:2] + [str(local_layer_id)] + keys[3:])
+            if keys[3] == 'attn' and keys[4] == 'in_proj':
+                in_size = mpu.divide(value.size(0), mpu.get_model_parallel_world_size())
+                if keys[5] in ('weight', 'bias'):
+                    new_value = value[mpu.get_model_parallel_rank() * in_size
+                                      :(mpu.get_model_parallel_rank() + 1) * in_size]
+                else:
+                    raise NotImplementedError(f"Unknown key {key}")
+            elif keys[3] == 'attn' and keys[4] == 'out_proj':
+                if keys[5] == 'weight':
+                    out_size = mpu.divide(value.size(1), mpu.get_model_parallel_world_size())
+                    new_value = value[:, mpu.get_model_parallel_rank() * out_size
+                                         :(mpu.get_model_parallel_rank() + 1) * out_size]
+                elif keys[5] == 'bias':
+                    new_value = value
+                else:
+                    raise NotImplementedError(f"Unknown key {key}")
+            elif keys[3] == 'fc1':
+                in_size = mpu.divide(value.size(0), mpu.get_model_parallel_world_size())
+                if keys[4] in ('weight', 'bias'):
+                    new_value = value[mpu.get_model_parallel_rank() * in_size
+                                      :(mpu.get_model_parallel_rank() + 1) * in_size]
+                else:
+                    raise NotImplementedError(f"Unknown key {key}")
+            elif keys[3] == 'fc2':
+                if keys[4] == 'weight':
+                    out_size = mpu.divide(value.size(1), mpu.get_model_parallel_world_size())
+                    new_value = value[:, mpu.get_model_parallel_rank() * out_size
+                                         :(mpu.get_model_parallel_rank() + 1) * out_size]
+                elif keys[4] == 'bias':
+                    new_value = value
+                else:
+                    raise NotImplementedError(f"Unknown key {key}")
+            else:
+                new_value = value
+            sliced_state_dict[new_key] = new_value
+    return sliced_state_dict
+
+
 def verify_one_step(args):
     if args.verify == "save":
         assert dist.get_world_size() == 1
@@ -347,16 +395,7 @@ def verify_one_step(args):
         assert args.verify == "load"
         config, layers, pipelined_layers = initialize_model(args)
         loaded_state_dict = os.path.join(args.verify_path, 'model.ckpt')
-        sliced_state_dict = OrderedDict()
-        start_layer_id = (config.n_total_layers // args.pipeline_parallel_size * mpu.get_pipeline_parallel_group_rank()
-                          + min(mpu.get_pipeline_parallel_group_rank(),
-                                config.n_total_layers % args.pipeline_parallel_size))
-        end_layer_id = start_layer_id + config.n_layers
-        print(f"rank={args.rank} layer_id range: [{start_layer_id}, {end_layer_id})")
-        exit(1)
-        for key, value in loaded_state_dict.items():
-            keys = key.split('.')
-            global_layer_id = int(keys[2])
+        sliced_state_dict = slice_state_dict(config, loaded_state_dict)
         pipelined_layers.load_state_dict(sliced_state_dict)
         if mpu.get_pipeline_parallel_group_rank() == 0:
             x = torch.load(os.path.join(args.verify_path, 'input.pt'))
@@ -374,9 +413,11 @@ def verify_one_step(args):
             raise
         torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, 'model.ckpt'))
         grad_dic = OrderedDict((x[0], x[1].grad) for x in pipelined_layers.named_parameters())
-        torch.save(grad_dic, os.path.join(args.verify_path, 'model.grad.ckpt'))
-
-
+        loaded_grad_dic = torch.load(os.path.join(args.verify_path, 'model.grad.ckpt'))
+        sliced_grad_dic = slice_state_dict(config, loaded_grad_dic)
+        assert grad_dic.keys() == sliced_grad_dic.keys()
+        for k in grad_dic.keys():
+            assert torch.allclose(grad_dic[k], sliced_grad_dic[k])
 
 
 def main():
