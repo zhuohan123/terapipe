@@ -292,9 +292,9 @@ class ModelParallelMultiheadLMAttentionWithCache(MultiheadLMAttentionWithCache):
         self.embed_dim = embed_dim
 
         self.in_proj = mpu.ColumnParallelLinear(embed_dim, 3 * embed_dim, bias=bias,
-                                                gather_output=False, initialize_locally=True, device=device)
+                                                gather_output=False, device=device)
         self.out_proj = mpu.RowParallelLinear(embed_dim, embed_dim, bias=bias,
-                                              input_is_parallel=True, initialize_locally=True, device=device)
+                                              input_is_parallel=True, device=device)
 
         self.model_parallel_size = mpu.get_model_parallel_world_size()
 
@@ -323,8 +323,8 @@ class ModelParallelTransformerLayer(TransformerLayer):
         self.attn_ln = nn.LayerNorm(embedding_dim).to(device)
         self.attn = ModelParallelMultiheadLMAttentionWithCache(embedding_dim, num_attention_heads, device=device)
         self.fc_ln = nn.LayerNorm(embedding_dim).to(device)
-        self.fc1 = mpu.ColumnParallelLinear(embedding_dim, ffn_embedding_dim, gather_output=False).to(device)
-        self.fc2 = mpu.RowParallelLinear(ffn_embedding_dim, embedding_dim, input_is_parallel=True).to(device)
+        self.fc1 = mpu.ColumnParallelLinear(embedding_dim, ffn_embedding_dim, gather_output=False, device=device)
+        self.fc2 = mpu.RowParallelLinear(ffn_embedding_dim, embedding_dim, input_is_parallel=True, device=device)
 
 
 class SingleDeviceTransformer(nn.Module):

@@ -61,8 +61,7 @@ class TransformerLayers(nn.Module):
                 self.embedding_dim,
                 self.ffn_embedding_dim,
                 self.num_attention_heads,
-                device="cuda",
-            )
+            ).to('cuda')
             self.layers.append(layer.half() if self.mixed_precision else layer)
         self.layers = nn.ModuleList(self.layers)
 
@@ -283,7 +282,7 @@ def main():
     parser.add_argument('--n-steps', metavar='N', type=int, default=10)
     parser.add_argument('--mixed-precision', action='store_true', default=False)
     parser.add_argument('--use-mpi', action='store_true', default=False)
-    parser.add_argument('--save-model', action='store_true', default=False)
+    parser.add_argument('--save-model', metavar='PREFIX', type=str, default=None)
 
     args = parser.parse_args()
     if args.use_mpi:
@@ -305,8 +304,8 @@ def main():
     seq_slices = uniform_slice(config.seq_len, args.n_input_slices)
     batch_slices = uniform_slice(config.batch_size, args.n_batch_slices)
     pipelined_layers = TeraPipe(layers, config.batch_size, config.seq_len, batch_slices, seq_slices)
-    if args.save_model:
-        torch.save(pipelined_layers.state_dict(), f"model.ckpt.{args.rank}")
+    if args.save_model is not None:
+        torch.save(pipelined_layers.state_dict(), f"{args.save_model}.{args.rank}")
         return
     optimizer = torch.optim.SGD(pipelined_layers.parameters(), lr=0.001)
     try:
