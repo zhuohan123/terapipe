@@ -8,6 +8,7 @@ from types import FunctionType
 from typing import Callable, List
 import gc
 import json
+from filelock import FileLock
 
 from apex.optimizers import FusedAdam
 import numpy as np
@@ -394,11 +395,13 @@ def verify_one_step(args):
     else:
         assert args.verify == "load"
         config, layers, pipelined_layers = initialize_model(args)
-        loaded_state_dict = torch.load(os.path.join(args.verify_path, 'model.ckpt'), map_location=torch.device('cuda'))
+        with FileLock(os.path.join(args.verify_path, 'model.ckpt.lock')):
+            loaded_state_dict = torch.load(os.path.join(args.verify_path, 'model.ckpt'), map_location=torch.device('cuda'))
         sliced_state_dict = slice_state_dict(config, loaded_state_dict)
         pipelined_layers.load_state_dict(sliced_state_dict)
         if mpu.get_pipeline_parallel_group_rank() == 0:
-            x = torch.load(os.path.join(args.verify_path, 'input.pt'), map_location=torch.device('cuda'))
+            with FileLock(os.path.join(args.verify_path, 'input.pt.lock')):
+                x = torch.load(os.path.join(args.verify_path, 'input.pt'), map_location=torch.device('cuda'))
         else:
             x = None
         try:
@@ -413,7 +416,8 @@ def verify_one_step(args):
             raise
         torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, 'model.ckpt'))
         grad_dic = OrderedDict((x[0], x[1].grad) for x in pipelined_layers.named_parameters())
-        loaded_grad_dic = torch.load(os.path.join(args.verify_path, 'model.grad.ckpt'), map_location=torch.device('cuda'))
+        with FileLock(os.path.join(args.verify_path, 'model.grad.ckpt.lock')):
+            loaded_grad_dic = torch.load(os.path.join(args.verify_path, 'model.grad.ckpt'), map_location=torch.device('cuda'))
         sliced_grad_dic = slice_state_dict(config, loaded_grad_dic)
         assert grad_dic.keys() == sliced_grad_dic.keys()
         for k in grad_dic.keys():
