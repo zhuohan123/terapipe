@@ -414,7 +414,6 @@ def verify_one_step(args):
         except:
             print(f"rank={args.rank}", traceback.format_exc())
             raise
-        torch.save(pipelined_layers.state_dict(), os.path.join(args.verify_path, 'model.ckpt'))
         grad_dic = OrderedDict((x[0], x[1].grad) for x in pipelined_layers.named_parameters())
         with FileLock(os.path.join(args.verify_path, 'model.grad.ckpt.lock')):
             loaded_grad_dic = torch.load(os.path.join(args.verify_path, 'model.grad.ckpt'), map_location=torch.device('cuda'))
