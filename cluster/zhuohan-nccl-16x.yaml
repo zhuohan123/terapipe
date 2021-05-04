@@ -4,14 +4,14 @@ cluster_name: model_parallel_nccl_16x
 # The minimum, maximum and initial number of workers nodes to launch in addition
 # to the head node. For this project, we do not need the autoscaling, so we
 # always set these numbers the same.
-min_workers: 0
-initial_workers: 0
-max_workers: 0
+min_workers: 47
+initial_workers: 47
+max_workers: 47
 
 provider:
     type: aws
     region: us-west-2
-    availability_zone: us-west-2a,us-west-2b,us-west-2c
+    availability_zone: us-west-2c
     cache_stopped_nodes: False
 
 auth:
@@ -23,7 +23,7 @@ head_node:
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
-        GroupName: pipe-group
+        GroupName: pipe-group-c
 
 worker_nodes:
     InstanceType: p3.16xlarge
@@ -31,7 +31,7 @@ worker_nodes:
     SecurityGroupIds:
         - "sg-f55048b4"
     Placement:
-        GroupName: pipe-group
+        GroupName: pipe-group-c
 
 setup_commands:
     - sudo mount -t efs fs-6dad81c6:/ efs
@@ -47,3 +47,4 @@ worker_start_ray_commands:
     - ray stop
     - "ulimit -n 65536; ray start --address=$RAY_HEAD_IP:6379 --object-manager-port=8076 --resources='{\"machine\": 1}'"
 
+head_setup_commands: []
