@@ -1,6 +1,5 @@
 #!/bin/bash
 if [ "$#" -lt 9 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) number of nodes, number of gpus per node, model parallel size, pipeline parallel size, model name, batch size, number of batch slices, number of input slices, number of steps, [extra args] required"; exit -1; fi
-if [ "$#" -gt 11 ]; then echo "$(tput setaf 1)[ERROR]$(tput sgr 0) too many arguments: $#"; exit -1; fi
 N_NODES=$1
 N_GPUS=$2 # per node
 MODEL_PARALLEL_SIZE=$3
